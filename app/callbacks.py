@@ -29,7 +29,8 @@ from config import (
     GRID_ENV_TEMP_GPKG, GRID_ENV_SAL_GPKG,
     GRID_ENV_CHLA_GPKG, GRID_ENV_FLOW_GPKG,
 )
-from app.map_utils import build_map, build_env_map, empty_map
+from app.map_utils import (build_map, build_env_map, empty_map,
+                           build_exclusion_outline_map)
 from app.layout import (render_farm_summary, render_cell_report,
                         render_compare_table)
 from model.site_selector import cell_report
@@ -57,6 +58,7 @@ def load_all_grids(app: dash.Dash) -> None:
     app.server._farm_scenario = None   # M2/M3/M4 result on farm cells (scenario)
     app.server._m12_result    = None   # discretise_farm() dict
     app.server._scenario_label = ""
+    app.server._drawn_shapes   = []
     print("[App] Startup complete")
 
 
@@ -74,19 +76,7 @@ def _load_grid(path: Path) -> gpd.GeoDataFrame | None:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _compute_rdep(gdf: gpd.GeoDataFrame, max_rdep: float = 2.0) -> np.ndarray:
-    bathy = gdf["bathymetry_m"].fillna(0).values
-    rdep  = np.where(bathy - 2 <= max_rdep, np.maximum(bathy - 2, 0), max_rdep)
-    return np.where(bathy >= 4, rdep, 0.0)
 
-
-def _run_m2_m3_m4(gdf: gpd.GeoDataFrame,
-                  max_rdep: float, iloop: float) -> gpd.GeoDataFrame:
-    gdf = run_module2(gdf, n_scenarios=N_SC_APP, n_workers=N_CPU)
-    gdf["rdep"] = _compute_rdep(gdf, max_rdep)
-    gdf = run_module3(gdf)
-    gdf = run_module4(gdf)
-    return gdf
 
 
 def _paper_to_lonlat_derived(
@@ -273,6 +263,8 @@ def register_callbacks(app: dash.Dash) -> None:
             except Exception as e:
                 print(f"[Shape] Exclusion check error: {e}")
 
+        # Store the full shape dict (not just path) so we can re-inject it
+        app.server._drawn_shapes = shapes
         return {"shape_path": path}, warning_text, warning_style
 
     # ── Track map viewport (center + zoom) ───────────────────────────────────
@@ -349,10 +341,10 @@ def register_callbacks(app: dash.Dash) -> None:
         base_style = {"marginTop": "6px", "fontSize": ".70rem", "fontWeight": "600"}
         if zoom == 0:
             return "", {**base_style, "display": "none"}
-        if zoom < 13:
-            return (f"⚠  Zoom in more — need zoom ≥ 14 for farm scale  (current: {zoom:.1f})",
+        if zoom < 9:
+            return (f"⚠  Zoom in more before drawing  (current: {zoom:.1f}, need ≥ 10)",
                     {**base_style, "color": "#f06a6a"})
-        if zoom < 14:
+        if zoom < 10:
             return (f"⚠  Almost there — zoom in a bit more  (current: {zoom:.1f})",
                     {**base_style, "color": "#f0a040"})
         return (f"✓  Ready to draw  (zoom {zoom:.1f})",
@@ -425,48 +417,52 @@ def register_callbacks(app: dash.Dash) -> None:
             gdf = app.server._baseline
             if gdf is None:
                 return empty_map("baseline.gpkg not found — run pipeline.py first"), ""
-            # No colour on startup — only render when user picks a layer
-            if env_layer is None or ctx.triggered_id not in (
-                    "dd-env-layer", "dd-harvest-month"):
-                fig = empty_map("")   # sets initial viewport, no message
-                return fig, f"Baseline · {len(gdf):,} cells — select a colour layer in Step 1"
-            fig    = build_env_map(gdf, env_layer, month or PRIMARY_HARVEST)
+            shapes = getattr(app.server, "_drawn_shapes", [])
+            if env_layer is None or env_layer == "none":
+                # Plain basemap — no color, no dots
+                fig = empty_map("")
+                return fig, f"Baseline · {len(gdf):,} cells — select a layer in Step 1"
+            if env_layer == "exclusions":
+                fig    = build_exclusion_outline_map(gdf, shapes=shapes)
+                status = f"Baseline · {len(gdf):,} cells · exclusion zones"
+                return fig, status
+            fig    = build_env_map(gdf, env_layer, month or PRIMARY_HARVEST,
+                                   shapes=shapes)
             status = f"Baseline · {len(gdf):,} cells · {env_layer}"
             return fig, status
 
-        # After compute: choose baseline or scenario farm cells
-        if view == "scenario" and app.server._farm_scenario is not None:
-            farm_gdf = app.server._farm_scenario
+        # After compute: map always shows the FULL BASELINE grid (has M2/M3/M4
+        # from pipeline.py). Farm cells are highlighted as selected_ids.
+        # This matches the notebook: full spatial picture across all waters.
+        shapes   = getattr(app.server, "_drawn_shapes", [])
+        farm_gdf = app.server._farm_baseline   # farm_cells with M12+M2+M3+M4
+
+        if view == "scenario" and app.server._scenario is not None:
+            full_gdf = app.server._scenario
             label    = app.server._scenario_label or "Scenario"
         else:
-            farm_gdf = app.server._farm_baseline
+            full_gdf = app.server._baseline
             label    = "Baseline"
 
-        if farm_gdf is None:
-            return empty_map("Compute farm first"), ""
+        if full_gdf is None:
+            return empty_map("baseline.gpkg not found — run pipeline.py first"), ""
 
-        # Crop mode: farm only (just computed cells) or full grid with results
-        if crop_mode == "full" and app.server._baseline is not None:
-            # Overlay farm result columns onto full baseline grid for context
-            full = app.server._baseline.copy()
-            col  = result_layer or "N_red"
-            m    = f"{month or PRIMARY_HARVEST:02d}"
-            rcol = f"{col}_{m}" if col not in ("conflict_score","bathymetry_m") else col
-            if rcol in farm_gdf.columns:
-                farm_ids = farm_gdf["cell_id"].values
-                full.loc[full["cell_id"].isin(farm_ids), rcol] = \
-                    farm_gdf.set_index("cell_id")[rcol].values
-                # Zero out non-farm cells so they appear blank
-                full.loc[~full["cell_id"].isin(farm_ids), rcol] = 0
-            gdf   = full
-            title = f"{label} — full grid"
+        # Farm cell ids for highlight overlay
+        farm_ids = (farm_gdf["cell_id"].tolist()
+                    if farm_gdf is not None else [])
+
+        # Crop mode: zoom to farm area by subsetting, or show full grid
+        if crop_mode == "farm" and farm_gdf is not None:
+            gdf   = full_gdf[full_gdf["cell_id"].isin(farm_ids)]
+            title = f"{label} — farm area"
         else:
-            gdf   = farm_gdf
-            title = f"{label} — farm cells"
+            gdf   = full_gdf
+            title = f"{label} — full grid"
 
         fig    = build_map(gdf, result_layer or "N_red", month or PRIMARY_HARVEST,
-                           title=title)
-        status = f"{label} · {len(farm_gdf):,} farm cells"
+                           title=title, shapes=shapes, farm_gdf=farm_gdf)
+        status = (f"{label} · {len(full_gdf):,} cells"
+                  + (f" · {len(farm_ids)} farm cells" if farm_ids else ""))
         return fig, status
 
     # ── Show map toggle when scenario loaded ──────────────────────────────────
@@ -487,6 +483,8 @@ def register_callbacks(app: dash.Dash) -> None:
         Output("dd-result-layer",           "disabled"),
         Output("btn-dl-env-baseline",       "disabled"),
         Output("btn-dl-results-baseline",   "disabled"),
+        Output("btn-dl-cell-summary",       "disabled"),
+        Output("btn-dl-farm-summary",       "disabled"),
         Output("export-hint",               "children"),
         Output("store-farm-cells-ids",      "data"),
         Input("btn-compute",                "n_clicks"),
@@ -504,12 +502,12 @@ def register_callbacks(app: dash.Dash) -> None:
         # Zoom guard — polygon must be drawn at zoom ≥ 11 for farm-scale accuracy
         vp   = viewport or {}
         zoom = vp.get("zoom", 0)
-        if zoom < 14:
-            msg = (f"⚠  Zoom in further before computing — current zoom {zoom:.1f}, "
-                   f"need ≥ 14. Scroll the map wheel until the visible area "
-                   f"is ~2 km wide (farm scale), then redraw the polygon.")
+        if zoom < 10:
+            msg = (f"⚠  Zoom in before computing — current zoom {zoom:.1f}, "
+                   f"need ≥ 10. Scroll the map wheel to zoom into your site, "
+                   f"then redraw the polygon.")
             return (no_update, msg, no_update,
-                    True, True, True, no_update, no_update)
+                    True, True, True, True, True, no_update, no_update)
 
         shape_path = (shape_store or {}).get("shape_path", "")
         coords = _parse_path_to_lonlat(
@@ -521,12 +519,12 @@ def register_callbacks(app: dash.Dash) -> None:
         if not coords:
             return (no_update,
                     "⚠  Draw a polygon on the map first, then press Compute.",
-                    no_update, True, True, True, no_update, no_update)
+                    no_update, True, True, True, True, True, no_update, no_update)
 
         base_env = app.server._base_env_grid
         if base_env is None:
             return (False, "❌ Base grid not found — run pipeline.py first",
-                    no_update, True, True, True, no_update, no_update)
+                    no_update, True, True, True, True, True, no_update, no_update)
 
         max_rdep = RDEP_MAP.get(max_rdep, 2.0)
         iloop    = ILOOP_MAP.get(iloop, 0.7)
@@ -544,61 +542,61 @@ def register_callbacks(app: dash.Dash) -> None:
             )
         except Exception as e:
             return (False, f"❌ M12 error: {e}",
-                    no_update, True, True, True, no_update, no_update)
+                    no_update, True, True, True, True, True, no_update, no_update)
 
         farm_cells = m12.get("farm_cells")
         if farm_cells is None or farm_cells.empty:
-            n_excl = m12.get("n_excluded", "")
             return (False,
-                    f"⚠  No viable cells in polygon — all cells are excluded "
-                    f"(MPA, military, cables, shallow water etc). "
-                    f"Try a different location.",
-                    no_update, True, True, True, no_update, no_update)
+                    "⚠  No viable cells in polygon — all cells are excluded "
+                    "(MPA, military, cables, shallow water etc). "
+                    "Try a different location.",
+                    no_update, True, True, True, True, True, no_update, no_update)
 
-        # Attach env columns that are missing from farm_cells
-        # (farm_cells from baseline.gpkg already has them; grid_base.gpkg may not)
-        baseline = app.server._baseline
-        if baseline is not None:
-            env_prefixes = ("temp_mean_", "sal_mean_", "lnchla_mean_",
-                            "vh_", "uo_", "vo_")
-            missing_env = [c for c in baseline.columns
-                           if any(c.startswith(p) for p in env_prefixes)
-                           and c not in farm_cells.columns]
-            if missing_env:
-                farm_ids = farm_cells["cell_id"].values
-                base_sub = (baseline[baseline["cell_id"].isin(farm_ids)]
-                            .set_index("cell_id")[missing_env])
-                farm_cells = (farm_cells.set_index("cell_id")
-                              .join(base_sub, how="left")
-                              .reset_index())
-            farm_cells = farm_cells.copy()  # defragment
-
-        # Run M2 → M3 → M4 on farm cells
+        # ── Exactly as in pipeline_debug.ipynb ───────────────────────────────
+        # farm_cells from M12 already has env columns (from baseline.gpkg).
+        # Run M2 → M3 → M4 on farm_cells only — for the RIGHT PANEL summary.
+        # The MAP always shows the full baseline grid (already has M2/M3/M4).
+        # This matches notebook: farm_cells = run_module2(farm_cells, ...)
+        #                                      run_module3(farm_cells)
+        #                                      run_module4(farm_cells,
+        #                                          D_short=..., farm_area_m2=...)
         try:
-            farm_computed = _run_m2_m3_m4(farm_cells, max_rdep, iloop)
+            farm_cells = run_module2(farm_cells, n_scenarios=N_SC_APP,
+                                     n_workers=N_CPU)
+            farm_cells = run_module3(farm_cells)
+            farm_cells = run_module4(
+                farm_cells,
+                D_short      = m12.get("D_short"),
+                farm_area_m2 = m12.get("farm_area_m2"),
+            )
+            farm_cells = farm_cells.copy()
         except Exception as e:
             return (False, f"❌ Compute error: {e}",
-                    no_update, True, True, True, no_update, no_update)
+                    no_update, True, True, True, True, True, no_update, no_update)
 
-        app.server._farm_baseline = farm_computed
+        # Store M12 result + computed farm cells for right panel
+        app.server._farm_baseline = farm_cells
         app.server._m12_result    = m12
+        # Clear paper-anchored drawn shape — farm boundary trace replaces it
+        app.server._drawn_shapes  = []
 
-        n_viable = int(farm_cells.get("viable", pd.Series([True]*len(farm_cells))).sum()) \
+        n_viable = int(farm_cells["viable"].sum()) \
                    if "viable" in farm_cells.columns else len(farm_cells)
-
-        nr = farm_computed[f"N_red_{m_str}"].sum() \
-             if f"N_red_{m_str}" in farm_computed.columns else 0
+        nr = float(farm_cells[f"N_red_{m_str}"].sum()) \
+             if f"N_red_{m_str}" in farm_cells.columns else 0.0
 
         status  = (f"✅ Done — {n_viable} viable cells · "
                    f"N-red: {nr:.1f} tN (month {m_str})")
         summary = render_farm_summary(
-            {**m12, "farm_cells": farm_computed}, m_str)
-        farm_ids_json = farm_computed["cell_id"].tolist()
+            {**m12, "farm_cells": farm_cells}, m_str)
+        farm_ids_json = farm_cells["cell_id"].tolist()
 
         return (True, status, summary,
                 False,   # unlock result layer dropdown
                 False,   # unlock env export
                 False,   # unlock results export
+                False,   # unlock cell summary export
+                False,   # unlock farm summary export
                 "Step 2 complete — exports ready.",
                 farm_ids_json)
 
@@ -637,22 +635,24 @@ def register_callbacks(app: dash.Dash) -> None:
         except FileNotFoundError as e:
             return False, f"❌ {str(e)[:100]}", True, True, ""
 
-        # Copy exclusion/conflict columns
-        baseline = app.server._baseline
-        if baseline is not None:
-            for col in ["excluded","conflict_score","bathymetry_m",
-                        *[c for c in baseline.columns if c.startswith("excl_")]]:
-                if col in baseline.columns and col not in grid_scen.columns:
-                    grid_scen[col] = baseline[col].values
+        # Store full scenario grid for map display
+        app.server._scenario = grid_scen
 
-        # Subset to farm cells and run M2/M3/M4
+        # Run M2/M3/M4 on farm_cells only — for right panel summary
+        # Exactly as notebook: farm_cells get scenario env, then M2→M3→M4
         m12 = app.server._m12_result
         if m12 is not None:
             farm_ids  = m12["farm_cells"]["cell_id"].values
             farm_scen = grid_scen[grid_scen["cell_id"].isin(farm_ids)].copy()
             if not farm_scen.empty:
-                farm_scen = _run_m2_m3_m4(
-                    farm_scen, max_rdep or 2.0, iloop or 0.7)
+                farm_scen = run_module2(farm_scen, n_scenarios=N_SC_APP,
+                                        n_workers=N_CPU)
+                farm_scen = run_module3(farm_scen)
+                farm_scen = run_module4(
+                    farm_scen,
+                    D_short      = m12.get("D_short"),
+                    farm_area_m2 = m12.get("farm_area_m2"),
+                )
                 app.server._farm_scenario = farm_scen
 
         from config_scenario import SSP_SCENARIOS
@@ -697,20 +697,23 @@ def register_callbacks(app: dash.Dash) -> None:
         grid_scen = run_module1(base_env, delta_temp=dtemp, delta_sal=dsal,
                                 chla_mult=chla_mult, force_resample=False)
 
-        baseline = app.server._baseline
-        if baseline is not None:
-            for col in ["excluded","conflict_score","bathymetry_m",
-                        *[c for c in baseline.columns if c.startswith("excl_")]]:
-                if col in baseline.columns and col not in grid_scen.columns:
-                    grid_scen[col] = baseline[col].values
+        # Store full scenario grid for map display
+        app.server._scenario = grid_scen
 
+        # Run M2/M3/M4 on farm_cells for right panel summary
         m12 = app.server._m12_result
         if m12 is not None:
             farm_ids  = m12["farm_cells"]["cell_id"].values
             farm_scen = grid_scen[grid_scen["cell_id"].isin(farm_ids)].copy()
             if not farm_scen.empty:
-                farm_scen = _run_m2_m3_m4(
-                    farm_scen, max_rdep or 2.0, iloop or 0.7)
+                farm_scen = run_module2(farm_scen, n_scenarios=N_SC_APP,
+                                        n_workers=N_CPU)
+                farm_scen = run_module3(farm_scen)
+                farm_scen = run_module4(
+                    farm_scen,
+                    D_short      = m12.get("D_short"),
+                    farm_area_m2 = m12.get("farm_area_m2"),
+                )
                 app.server._farm_scenario = farm_scen
 
         label = f"ΔT={dtemp:+.1f}°C ΔS={dsal:+.1f}psu ChlA×{chla_mult:.2f}"
@@ -761,6 +764,100 @@ def register_callbacks(app: dash.Dash) -> None:
             comp_div = render_compare_table(rep_base, rep_scen, label)
 
         return cell_div, comp_div
+
+    # ── Export: farm geometry + results summary CSV ───────────────────────────
+    @app.callback(
+        Output("dl-farm-summary", "data"),
+        Input("btn-dl-farm-summary", "n_clicks"),
+        State("dd-harvest-month", "value"),
+        prevent_initial_call=True,
+    )
+    def dl_farm_summary(n, month):
+        if not n:
+            raise PreventUpdate
+        m12  = app.server._m12_result
+        farm = app.server._farm_baseline
+        if m12 is None or farm is None:
+            raise PreventUpdate
+        month = month or PRIMARY_HARVEST
+        m_str = f"{month:02d}"
+
+        # Build summary rows matching the right-panel display
+        rows = []
+
+        # Farm geometry
+        geom_fields = [
+            ("Farm area [ha]",    m12.get("farm_area_m2", 0) / 1e4),
+            ("Sections",          m12.get("n_sections")),
+            ("D_short [m]",       m12.get("D_short")),
+            ("D_long [m]",        m12.get("D_long")),
+            ("l_col mean [m]",    m12.get("l_col")),
+            ("Orientation [deg]", m12.get("orientation_deg")),
+            ("Flow mean [m/s]",   m12.get("vh_mean")),
+            ("Viable cells",      int(farm["viable"].sum())
+                                  if "viable" in farm.columns else len(farm)),
+        ]
+        for label, val in geom_fields:
+            rows.append({"section": "Farm geometry", "metric": label,
+                         "value": round(float(val), 4) if val is not None else ""})
+
+        # Results
+        result_fields = [
+            ("N-reduction [tN]",   f"N_red_{m_str}"),
+            ("P-reduction [tP]",   f"P_red_{m_str}"),
+            ("Harvest WW [t]",     f"harvest_WW_{m_str}"),
+            ("Shell DW [t]",       f"shell_DW_{m_str}"),
+            ("mbio p50 [gDW]",     f"mbio_p50_{m_str}"),
+            ("mbio p05 [gDW]",     f"mbio_p05_{m_str}"),
+            ("mbio p95 [gDW]",     f"mbio_p95_{m_str}"),
+            ("N_red p05 [tN]",     f"N_red_p05_{m_str}"),
+            ("N_red p95 [tN]",     f"N_red_p95_{m_str}"),
+            ("vh_ratio",           f"vh_ratio_{m_str}"),
+            ("food_limitation",    f"food_limitation_{m_str}"),
+        ]
+        for label, col in result_fields:
+            if col in farm.columns:
+                val = float(farm[col].fillna(0).sum()) \
+                      if col.startswith(("N_red","P_red","harvest","shell")) \
+                      else float(farm[col].fillna(0).mean())
+                rows.append({"section": f"Results — month {m_str}",
+                             "metric": label, "value": round(val, 4)})
+
+        buf = io.StringIO()
+        pd.DataFrame(rows).to_csv(buf, index=False)
+        return dict(content=buf.getvalue(),
+                    filename=f"mytigate_farm_summary_{m_str}.csv")
+
+    # ── Export: farm cell summary CSV ────────────────────────────────────────
+    @app.callback(
+        Output("dl-cell-summary", "data"),
+        Input("btn-dl-cell-summary", "n_clicks"),
+        State("dd-harvest-month", "value"),
+        prevent_initial_call=True,
+    )
+    def dl_cell_summary(n, month):
+        if not n:
+            raise PreventUpdate
+        farm = app.server._farm_baseline
+        if farm is None:
+            raise PreventUpdate
+        month  = month or PRIMARY_HARVEST
+        m_str  = f"{month:02d}"
+        # Select key columns for summary
+        keep = ["cell_id", "lat", "lon", "bathymetry_m", "rdep",
+                "excluded", "conflict_score", "viable"]
+        for prefix in ["mbio_p05_", "mbio_p50_", "mbio_p95_",
+                       "N_red_", "P_red_", "harvest_WW_", "harvest_DW_",
+                       "shell_DW_", "N_red_ha_", "vh_ratio_",
+                       "food_limitation_"]:
+            col = f"{prefix}{m_str}"
+            if col in farm.columns:
+                keep.append(col)
+        keep = [c for c in keep if c in farm.columns]
+        buf  = io.StringIO()
+        pd.DataFrame(farm[keep]).to_csv(buf, index=False, float_format="%.4f")
+        return dict(content=buf.getvalue(),
+                    filename=f"mytigate_farm_cells_{m_str}.csv")
 
     # ── Export: baseline env ──────────────────────────────────────────────────
     @app.callback(

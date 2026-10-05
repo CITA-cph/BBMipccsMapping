@@ -89,6 +89,8 @@ def build_map(
     harvest_month: int,
     selected_ids: list[int] | None = None,
     title: str = "",
+    shapes: list | None = None,
+    farm_gdf: gpd.GeoDataFrame | None = None,
 ) -> go.Figure:
     m   = f"{harvest_month:02d}"
     col = (f"{colour_col}_{m}"
@@ -104,14 +106,16 @@ def build_map(
     vmax   = float(np.percentile(pos, 98)) if len(pos) else 1.0
     cscale = COLOURSCALES.get(colour_col, "Viridis")
 
-    n_col  = f"N_red_{m}"
     b_col  = "bathymetry_m"
-    n_vals = gdf[n_col].fillna(0).values if n_col in gdf.columns else np.zeros(len(gdf))
     b_vals = gdf[b_col].fillna(0).values if b_col in gdf.columns else np.zeros(len(gdf))
+    lats_h = gdf["lat"].values
+    lons_h = gdf["lon"].values
 
+    # Show current layer value in hover, not hardcoded N_red
+    layer_label = col or colour_col
     hover = [
-        f"Cell {cid}<br>N-red: {nr:.2f} tN<br>Depth: {bd:.1f} m"
-        for cid, nr, bd in zip(gdf["cell_id"].values, n_vals, b_vals)
+        f"Lat: {la:.4f}  Lon: {lo:.4f}<br>Depth: {bd:.1f} m<br>{layer_label}: {v:.3f}"
+        for la, lo, bd, v in zip(lats_h, lons_h, b_vals, values)
     ]
 
     fig = go.Figure()
@@ -130,20 +134,104 @@ def build_map(
         name="Cells",
     ))
 
-    if selected_ids:
-        sel = gdf[gdf["cell_id"].isin(selected_ids)]
-        if not sel.empty:
-            fig.add_trace(go.Scattermap(
-                lat=sel["lat"].values, lon=sel["lon"].values,
-                mode="markers",
-                marker=dict(size=8, color="cyan", opacity=1.0),
-                name="Selected",
-                hoverinfo="text",
-                text=[f"SELECTED — Cell {c}" for c in sel["cell_id"].values],
-            ))
+    # Farm boundary — geo-anchored outline trace (scales with zoom)
+    if farm_gdf is not None:
+        boundary = farm_boundary_trace(farm_gdf)
+        if boundary is not None:
+            fig.add_trace(boundary)
 
-    fig.update_layout(**_mapbox_layout(title, preserve_viewport=True))
+    layout = _mapbox_layout(title, preserve_viewport=True)
+    if shapes:
+        layout["shapes"] = shapes
+    fig.update_layout(**layout)
     return fig
+
+
+def build_exclusion_outline_map(
+    gdf: gpd.GeoDataFrame,
+    shapes: list | None = None,
+) -> go.Figure:
+    """
+    Startup map: plain basemap with exclusion zone outlines.
+    Excluded cells shown as red outline dots; available cells as grey dots.
+    No color fill gradient — just spatial context of where students can/cannot draw.
+    """
+    center, zoom = _compute_center_zoom(gdf["lat"].values, gdf["lon"].values)
+
+    excl    = gdf["excluded"].fillna(False).values if "excluded" in gdf.columns \
+              else np.zeros(len(gdf), dtype=bool)
+    lats    = gdf["lat"].values
+    lons    = gdf["lon"].values
+
+    fig = go.Figure()
+
+    # Available cells — subtle grey
+    avail_mask = ~excl
+    if avail_mask.any():
+        fig.add_trace(go.Scattermap(
+            lat=lats[avail_mask], lon=lons[avail_mask],
+            mode="markers",
+            marker=dict(size=4, color="#2a3a4a", opacity=0.5),
+            hoverinfo="skip", name="Available",
+            customdata=gdf["cell_id"].values[avail_mask],
+        ))
+
+    # Excluded cells — red outline
+    if excl.any():
+        fig.add_trace(go.Scattermap(
+            lat=lats[excl], lon=lons[excl],
+            mode="markers",
+            marker=dict(size=5, color="#f06a6a", opacity=0.7),
+            text=[f"Cell {c} — EXCLUDED"
+                  for c in gdf["cell_id"].values[excl]],
+            hoverinfo="text", name="Excluded",
+            customdata=gdf["cell_id"].values[excl],
+        ))
+
+    layout = _mapbox_layout(
+        "Exclusion zones — red = restricted, draw only in grey areas",
+        preserve_viewport=False, center=center, zoom=zoom,
+    )
+    if shapes:
+        layout["shapes"] = shapes
+    fig.update_layout(**layout)
+    return fig
+
+
+def farm_boundary_trace(
+    farm_gdf: gpd.GeoDataFrame,
+    color: str = "cyan",
+    width: int = 2,
+) -> go.Scattermap | None:
+    """
+    Build a geo-anchored closed line trace outlining the farm cell boundaries.
+    Uses the union of farm cell geometries projected to WGS84.
+    Scales correctly with map zoom (geo-anchored, not paper-anchored).
+    """
+    if farm_gdf is None or farm_gdf.empty:
+        return None
+    try:
+        farm_wgs  = farm_gdf.to_crs("EPSG:4326")
+        union     = farm_wgs.geometry.union_all()
+        # Extract exterior coords from union (Polygon or MultiPolygon)
+        from shapely.geometry import MultiPolygon
+        polys = list(union.geoms) if union.geom_type == "MultiPolygon" else [union]
+        lats, lons = [], []
+        for poly in polys:
+            coords = list(poly.exterior.coords)
+            lons  += [c[0] for c in coords] + [None]
+            lats  += [c[1] for c in coords] + [None]
+        return go.Scattermap(
+            lat=lats, lon=lons,
+            mode="lines",
+            line=dict(color=color, width=width),
+            hoverinfo="skip",
+            name="Farm boundary",
+            showlegend=False,
+        )
+    except Exception as e:
+        print(f"[Farm boundary] Error: {e}")
+        return None
 
 
 def build_env_map(
@@ -151,6 +239,7 @@ def build_env_map(
     env_col: str,
     harvest_month: int,
     title: str = "",
+    shapes: list | None = None,
 ) -> go.Figure:
     """
     Step 1 map — shows a single env variable across the full grid.
@@ -194,8 +283,10 @@ def build_env_map(
         customdata=gdf["cell_id"].values,
         name=col or env_col,
     ))
-    fig.update_layout(**_mapbox_layout(title or col or env_col,
-                                       preserve_viewport=True))
+    layout = _mapbox_layout(title or col or env_col, preserve_viewport=True)
+    if shapes:
+        layout["shapes"] = shapes
+    fig.update_layout(**layout)
     return fig
 
 

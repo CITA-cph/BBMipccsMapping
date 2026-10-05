@@ -17,11 +17,13 @@ MONTH_LABELS  = {8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
 MONTH_OPTIONS = [{"label": MONTH_LABELS[m], "value": m} for m in HARVEST_MONTHS]
 
 ENV_LAYER_OPTIONS = [
-    {"label": "Temperature  [°C]",        "value": "temp_mean"},
-    {"label": "Salinity  [psu]",           "value": "sal_mean"},
-    {"label": "Chlorophyll-a  [ln µg/L]", "value": "lnchla_mean"},
-    {"label": "Flow speed  [m/s]",         "value": "vh"},
-    {"label": "Bathymetry  [m]",           "value": "bathymetry_m"},
+    {"label": "— No color —",               "value": "none"},
+    {"label": "Exclusion zones",            "value": "exclusions"},
+    {"label": "Temperature  [°C]",          "value": "temp_mean"},
+    {"label": "Salinity  [psu]",            "value": "sal_mean"},
+    {"label": "Chlorophyll-a  [ln µg/L]",  "value": "lnchla_mean"},
+    {"label": "Flow speed  [m/s]",          "value": "vh"},
+    {"label": "Bathymetry  [m]",            "value": "bathymetry_m"},
 ]
 RESULT_LAYER_OPTIONS = [
     {"label": "N-reduction  [tN/farm]",    "value": "N_red"},
@@ -105,17 +107,23 @@ body { margin:0; font-family:'Inter',system-ui,sans-serif;
 /* Sliders */
 .slider-wrap  { margin:6px 0 8px; }
 .slider-label { font-size:.70rem; color:#dde; display:block; margin-bottom:3px; }
-.rc-slider-rail   { background:#2a3a4a !important; }
-.rc-slider-track  { background:#3a7a5a !important; }
-.rc-slider-handle { border-color:#4caf79 !important; background:#ffffff !important; }
-.rc-slider-mark-text { color:#ccd !important; font-size:.68rem !important; }
-.rc-slider-dot    { background:#2a3a4a !important; border-color:#3a4a5a !important; }
-/* Dash slider tooltip */
-.rc-slider-tooltip-inner { background:#1c2230 !important; color:#fff !important;
-                            font-size:.68rem !important; }
-/* Plotly slider (used for dcc.Slider) */
-.js-plotly-plot .slider-handle { fill:#ffffff !important; }
-.dash-slider .rc-slider-handle { background:#ffffff !important; border-color:#4caf79 !important; }
+.rc-slider-rail        { background:#3a4a5a !important; height:4px !important; }
+.rc-slider-track       { background:#4caf79 !important; height:4px !important; }
+.rc-slider-handle      { border-color:#4caf79 !important; background:#ffffff !important;
+                         width:14px !important; height:14px !important;
+                         margin-top:-5px !important; }
+.rc-slider-mark-text   { color:#ffffff !important; font-size:.68rem !important; }
+.rc-slider-dot         { background:#3a4a5a !important; border-color:#4caf79 !important; }
+.rc-slider-tooltip-inner { background:#1c2230 !important; color:#ffffff !important;
+                            font-size:.68rem !important; border:1px solid #3a4a5a !important; }
+.dash-slider .rc-slider-rail  { background:#3a4a5a !important; }
+.dash-slider .rc-slider-track { background:#4caf79 !important; }
+/* Force track via the Dash-rendered class wrapper */
+.white-slider .rc-slider-track { background:#ffffff !important; height:4px !important; }
+.white-slider .rc-slider-rail  { background:#3a4a5a !important; height:4px !important; }
+.white-slider .rc-slider-handle { background:#ffffff !important;
+                                   border-color:#ffffff !important; }
+.white-slider .rc-slider-step   { background:transparent !important; }
 
 /* Status */
 .status-text { font-size:.70rem; color:#4caf79; margin-top:4px;
@@ -184,11 +192,19 @@ def _dd(sid, opts, val, **kw):
                         clearable=False, searchable=False,
                         className="dd", **kw)
 
+def _white_marks(marks: dict) -> dict:
+    """Force white text on slider marks — CSS class overrides don't reach rc-slider."""
+    return {k: {"label": str(v),
+                "style": {"color": "#ffffff", "fontSize": "0.68rem"}}
+            for k, v in marks.items()}
+
 def _slider(sid, label, mn, mx, step, val, marks):
     return html.Div([
         html.Label(label, className="slider-label"),
-        dcc.Slider(id=sid, min=mn, max=mx, step=step, value=val, marks=marks,
-                   tooltip={"placement":"bottom","always_visible":False}),
+        dcc.Slider(id=sid, min=mn, max=mx, step=step, value=val,
+                   marks=_white_marks(marks),
+                   tooltip={"placement": "bottom", "always_visible": False},
+                   className="white-slider"),
     ], className="slider-wrap")
 
 
@@ -199,8 +215,8 @@ def build_layout():
         html.Div(className="topbar", children=[
             html.Div(className="topbar-left", children=[
                 html.Span("🦪", className="topbar-icon"),
-                html.Span("MYTIGATE", className="topbar-title"),
-                html.Span("Mussel mitigation farm site selection · western Baltic Sea",
+                html.Span("MYTIGATE_futures", className="topbar-title"),
+                html.Span("Mussel mitigation farm site selection · Baltic and Atlantic Denmark",
                           className="topbar-sub"),
             ]),
             html.Div(className="topbar-right", children=[
@@ -263,7 +279,7 @@ def build_layout():
                 html.P("Select a layer to colour the map. No model results yet.",
                        className="sidebar-hint"),
                 _lbl("Colour layer"),
-                _dd("dd-env-layer", ENV_LAYER_OPTIONS, None),
+                _dd("dd-env-layer", ENV_LAYER_OPTIONS, "none"),
                 _lbl("Month"),
                 _dd("dd-harvest-month", MONTH_OPTIONS, PRIMARY_HARVEST),
 
@@ -273,10 +289,10 @@ def build_layout():
                 html.Div(className="draw-box", children=[
                     html.P("Use the draw tool in the map toolbar:"),
                     html.Ol(className="draw-steps", children=[
-                        html.Li("Zoom in until the area shown is ~2 km wide (zoom ≥ 14)"),
-                        html.Li("Click the polygon icon (✏) in the map toolbar"),
-                        html.Li("Click to place vertices on the map"),
-                        html.Li("Double-click to close the polygon"),
+                        html.Li("Zoom in to your site of interest (zoom ≥ 10)"),
+                        html.Li("Click the heart/lasso icon (♡) in the map toolbar"),
+                        html.Li("Click and drag to draw the farm polygon"),
+                        html.Li("Release to close the polygon"),
                         html.Li("Press Compute below"),
                     ]),
                     html.Div(id="div-zoom-warning",
@@ -324,10 +340,18 @@ def build_layout():
                                color="success", outline=True, disabled=True,
                                className="w-100 export-btn"),
                 ]),
+                dbc.Button("⬇  Farm summary (CSV)", id="btn-dl-farm-summary",
+                           color="secondary", outline=True, disabled=True,
+                           className="w-100 export-btn"),
+                dbc.Button("⬇  Farm cell summary (CSV)", id="btn-dl-cell-summary",
+                           color="secondary", outline=True, disabled=True,
+                           className="w-100 export-btn"),
                 dcc.Download(id="dl-env-baseline"),
                 dcc.Download(id="dl-results-baseline"),
                 dcc.Download(id="dl-env-scenario"),
                 dcc.Download(id="dl-results-scenario"),
+                dcc.Download(id="dl-farm-summary"),
+                dcc.Download(id="dl-cell-summary"),
             ]),
 
             # ── MAP ───────────────────────────────────────────────────────────

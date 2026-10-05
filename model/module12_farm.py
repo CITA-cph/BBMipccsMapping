@@ -36,18 +36,21 @@ def dominant_current_direction(
     cells: gpd.GeoDataFrame,
     month: int = PRIMARY_HARVEST,
 ) -> tuple[float, float]:
+    if cells.empty:
+        return 0.05, 0.0
     m = f"{month:02d}"
     for uo_col, vo_col in [(f"uo_{m}", f"vo_{m}")]:
         if uo_col in cells.columns and vo_col in cells.columns:
             uo = cells[uo_col].fillna(0).mean()
             vo = cells[vo_col].fillna(0).mean()
-            if abs(uo) + abs(vo) > 1e-6:
+            if np.isfinite(uo) and np.isfinite(vo) and abs(uo) + abs(vo) > 1e-6:
                 return float(uo), float(vo)
     vh_col = f"vh_{m}"
     if vh_col in cells.columns:
         vh = cells[vh_col].fillna(0.05).mean()
+        vh = float(vh) if np.isfinite(vh) else 0.05
         print(f"  [M12] No direction data — assuming eastward {vh:.3f} m/s")
-        return float(vh), 0.0
+        return vh, 0.0
     return 0.05, 0.0
 
 
@@ -112,7 +115,9 @@ def discretise_farm(
     D_short = longlines_per_section * longline_spacing     # e.g. 30×8 = 240m
     D_long  = longline_length                              # e.g. 200m
     section_area_m2  = D_short * D_long                   # 48,000 m²
-    viable_area_m2   = viable.sum() * 1_000_000           # 1km² per cell
+    # Use actual drawn polygon area — not grid cell count × 1km²
+    # Grid cells only determine env conditions; farm fills the polygon area
+    viable_area_m2   = polygon_utm.area
     n_sections       = max(1, int(viable_area_m2 / section_area_m2))
     farm_area_m2     = n_sections * section_area_m2
 
@@ -136,8 +141,10 @@ def discretise_farm(
     l_col_mean = float(lcol_per_cell[lcol_per_cell > 0].mean()) \
                  if (lcol_per_cell > 0).any() else 0.0
 
-    print(f"  [M12] l_col mean: {l_col_mean:.0f} m  "
-          f"rdep range: {rdep[rdep>0].min():.1f}–{rdep.max():.1f} m")
+    rdep_pos = rdep[rdep > 0]
+    rdep_str = (f"{rdep_pos.min():.1f}–{rdep.max():.1f} m"
+                if len(rdep_pos) else "no viable depth")
+    print(f"  [M12] l_col mean: {l_col_mean:.0f} m  rdep range: {rdep_str}")
 
     return {
         "farm_cells"           : farm_cells,
