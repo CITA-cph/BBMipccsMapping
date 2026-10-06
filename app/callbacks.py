@@ -402,40 +402,52 @@ def register_callbacks(app: dash.Dash) -> None:
         Output("topbar-status", "children"),
         Input("dd-env-layer",         "value"),
         Input("dd-result-layer",      "value"),
+        Input("dd-env-month",         "value"),
         Input("dd-harvest-month",     "value"),
         Input("store-active-view",    "data"),
         Input("store-compute-done",   "data"),
         Input("store-scenario-ready", "data"),
+        Input("store-scenario-label", "data"),
         Input("store-crop-mode",      "data"),
+        Input("slider-marker-size",   "value"),
     )
-    def render_map(env_layer, result_layer, month, view,
-                   compute_done, scen_ready, crop_mode):
-        month = month or PRIMARY_HARVEST
+    def render_map(env_layer, result_layer, env_month, harvest_month, view,
+                   compute_done, scen_ready, scenario_label, crop_mode, marker_size):
+        scen_label   = scenario_label or "baseline"
+        msize        = int(marker_size or 6)
+        shapes       = getattr(app.server, "_drawn_shapes", [])
+        e_month      = env_month     or 7
+        h_month      = harvest_month or PRIMARY_HARVEST
 
-        # Before compute: show env layer only if user has selected one
+        # Before compute: show env layer — use scenario grid if loaded and active
         if not compute_done:
-            gdf = app.server._baseline
+            if view == "scenario" and app.server._scenario is not None:
+                gdf = app.server._scenario
+            else:
+                gdf = app.server._baseline
             if gdf is None:
                 return empty_map("baseline.gpkg not found — run pipeline.py first"), ""
-            shapes = getattr(app.server, "_drawn_shapes", [])
+
             if env_layer is None or env_layer == "none":
-                # Plain basemap — no color, no dots
                 fig = empty_map("")
                 return fig, f"Baseline · {len(gdf):,} cells — select a layer in Step 1"
+
+            rev = f"{env_layer}|{e_month}|{scen_label}|{view}"
             if env_layer == "exclusions":
-                fig    = build_exclusion_outline_map(gdf, shapes=shapes)
-                status = f"Baseline · {len(gdf):,} cells · exclusion zones"
+                fig    = build_exclusion_outline_map(gdf, shapes=shapes,
+                                                     marker_size=msize)
+                fig.update_layout(uirevision=rev)
+                status = f"{scen_label} · {len(gdf):,} cells · exclusion zones"
                 return fig, status
-            fig    = build_env_map(gdf, env_layer, month or PRIMARY_HARVEST,
-                                   shapes=shapes)
-            status = f"Baseline · {len(gdf):,} cells · {env_layer}"
+
+            fig    = build_env_map(gdf, env_layer, e_month,
+                                   shapes=shapes, marker_size=msize,
+                                   uirevision=rev)
+            status = f"{scen_label} · {len(gdf):,} cells · {env_layer} month {e_month:02d}"
             return fig, status
 
-        # After compute: map always shows the FULL BASELINE grid (has M2/M3/M4
-        # from pipeline.py). Farm cells are highlighted as selected_ids.
-        # This matches the notebook: full spatial picture across all waters.
-        shapes   = getattr(app.server, "_drawn_shapes", [])
-        farm_gdf = app.server._farm_baseline   # farm_cells with M12+M2+M3+M4
+        # After compute: use harvest_month for result layers
+        farm_gdf = app.server._farm_baseline
 
         if view == "scenario" and app.server._scenario is not None:
             full_gdf = app.server._scenario
@@ -447,11 +459,9 @@ def register_callbacks(app: dash.Dash) -> None:
         if full_gdf is None:
             return empty_map("baseline.gpkg not found — run pipeline.py first"), ""
 
-        # Farm cell ids for highlight overlay
         farm_ids = (farm_gdf["cell_id"].tolist()
                     if farm_gdf is not None else [])
 
-        # Crop mode: zoom to farm area by subsetting, or show full grid
         if crop_mode == "farm" and farm_gdf is not None:
             gdf   = full_gdf[full_gdf["cell_id"].isin(farm_ids)]
             title = f"{label} — farm area"
@@ -459,21 +469,35 @@ def register_callbacks(app: dash.Dash) -> None:
             gdf   = full_gdf
             title = f"{label} — full grid"
 
-        fig    = build_map(gdf, result_layer or "N_red", month or PRIMARY_HARVEST,
-                           title=title, shapes=shapes, farm_gdf=farm_gdf)
+        rev = f"{result_layer}|{h_month}|{scen_label}|{view}|{crop_mode}"
+        fig    = build_map(gdf, result_layer or "N_red", h_month,
+                           title=title, shapes=shapes, farm_gdf=farm_gdf,
+                           marker_size=msize, uirevision=rev)
         status = (f"{label} · {len(full_gdf):,} cells"
                   + (f" · {len(farm_ids)} farm cells" if farm_ids else ""))
         return fig, status
 
-    # ── Show map toggle when scenario loaded ──────────────────────────────────
+    # ── Show map toggle as soon as scenario is loaded ─────────────────────────
     @app.callback(
         Output("div-map-toggle", "style"),
         Input("store-scenario-ready", "data"),
-        Input("store-compute-done",   "data"),
     )
-    def show_toggle(scen_ready, compute_done):
-        return ({"display": "flex"}
-                if scen_ready and compute_done else {"display": "none"})
+    def show_toggle(scen_ready):
+        return {"display": "flex"} if scen_ready else {"display": "none"}
+
+    # ── Auto-switch view to scenario when scenario loads ──────────────────────
+    @app.callback(
+        Output("btn-view-baseline", "className", allow_duplicate=True),
+        Output("btn-view-scenario", "className", allow_duplicate=True),
+        Output("store-active-view", "data",      allow_duplicate=True),
+        Input("store-scenario-label", "data"),
+        prevent_initial_call=True,
+    )
+    def auto_switch_to_scenario(label):
+        if not label:
+            raise PreventUpdate
+        a, i = "map-toggle-btn active", "map-toggle-btn inactive"
+        return i, a, "scenario"
 
     # ── Step 2: Compute farm ──────────────────────────────────────────────────
     @app.callback(
@@ -481,6 +505,7 @@ def register_callbacks(app: dash.Dash) -> None:
         Output("div-compute-status",        "children"),
         Output("div-farm-summary",          "children"),
         Output("dd-result-layer",           "disabled"),
+        Output("dd-harvest-month",          "disabled"),
         Output("btn-dl-env-baseline",       "disabled"),
         Output("btn-dl-results-baseline",   "disabled"),
         Output("btn-dl-cell-summary",       "disabled"),
@@ -491,7 +516,7 @@ def register_callbacks(app: dash.Dash) -> None:
         State("store-drawn-shape",           "data"),   # holds {"shape_path": "..."}
         State("slider-max-rdep",            "value"),
         State("slider-iloop",               "value"),
-        State("dd-harvest-month",           "value"),
+        State("dd-env-month",               "value"),
         State("store-map-viewport",         "data"),
         prevent_initial_call=True,
     )
@@ -507,7 +532,7 @@ def register_callbacks(app: dash.Dash) -> None:
                    f"need ≥ 10. Scroll the map wheel to zoom into your site, "
                    f"then redraw the polygon.")
             return (no_update, msg, no_update,
-                    True, True, True, True, True, no_update, no_update)
+                    True, True, True, True, True, True, no_update, no_update)
 
         shape_path = (shape_store or {}).get("shape_path", "")
         coords = _parse_path_to_lonlat(
@@ -519,12 +544,12 @@ def register_callbacks(app: dash.Dash) -> None:
         if not coords:
             return (no_update,
                     "⚠  Draw a polygon on the map first, then press Compute.",
-                    no_update, True, True, True, True, True, no_update, no_update)
+                    no_update, True, True, True, True, True, True, no_update, no_update)
 
         base_env = app.server._base_env_grid
         if base_env is None:
             return (False, "❌ Base grid not found — run pipeline.py first",
-                    no_update, True, True, True, True, True, no_update, no_update)
+                    no_update, True, True, True, True, True, True, no_update, no_update)
 
         max_rdep = RDEP_MAP.get(max_rdep, 2.0)
         iloop    = ILOOP_MAP.get(iloop, 0.7)
@@ -542,7 +567,7 @@ def register_callbacks(app: dash.Dash) -> None:
             )
         except Exception as e:
             return (False, f"❌ M12 error: {e}",
-                    no_update, True, True, True, True, True, no_update, no_update)
+                    no_update, True, True, True, True, True, True, no_update, no_update)
 
         farm_cells = m12.get("farm_cells")
         if farm_cells is None or farm_cells.empty:
@@ -550,7 +575,7 @@ def register_callbacks(app: dash.Dash) -> None:
                     "⚠  No viable cells in polygon — all cells are excluded "
                     "(MPA, military, cables, shallow water etc). "
                     "Try a different location.",
-                    no_update, True, True, True, True, True, no_update, no_update)
+                    no_update, True, True, True, True, True, True, no_update, no_update)
 
         # ── Exactly as in pipeline_debug.ipynb ───────────────────────────────
         # farm_cells from M12 already has env columns (from baseline.gpkg).
@@ -572,7 +597,7 @@ def register_callbacks(app: dash.Dash) -> None:
             farm_cells = farm_cells.copy()
         except Exception as e:
             return (False, f"❌ Compute error: {e}",
-                    no_update, True, True, True, True, True, no_update, no_update)
+                    no_update, True, True, True, True, True, True, no_update, no_update)
 
         # Store M12 result + computed farm cells for right panel
         app.server._farm_baseline = farm_cells
@@ -593,6 +618,7 @@ def register_callbacks(app: dash.Dash) -> None:
 
         return (True, status, summary,
                 False,   # unlock result layer dropdown
+                False,   # unlock harvest month dropdown
                 False,   # unlock env export
                 False,   # unlock results export
                 False,   # unlock cell summary export
@@ -621,10 +647,6 @@ def register_callbacks(app: dash.Dash) -> None:
         iloop    = ILOOP_MAP.get(iloop, 0.7)
         if not n:
             raise PreventUpdate
-        if not compute_done:
-            return (no_update,
-                    "⚠  Complete Step 2 (Compute farm) first.",
-                    True, True, no_update)
 
         base_env = app.server._base_env_grid
         if base_env is None:
@@ -635,13 +657,12 @@ def register_callbacks(app: dash.Dash) -> None:
         except FileNotFoundError as e:
             return False, f"❌ {str(e)[:100]}", True, True, ""
 
-        # Store full scenario grid for map display
+        # Always store full scenario grid — needed for env layer browsing
         app.server._scenario = grid_scen
 
-        # Run M2/M3/M4 on farm_cells only — for right panel summary
-        # Exactly as notebook: farm_cells get scenario env, then M2→M3→M4
+        # Only run M2/M3/M4 on farm_cells if farm has been computed
         m12 = app.server._m12_result
-        if m12 is not None:
+        if compute_done and m12 is not None:
             farm_ids  = m12["farm_cells"]["cell_id"].values
             farm_scen = grid_scen[grid_scen["cell_id"].isin(farm_ids)].copy()
             if not farm_scen.empty:
@@ -681,10 +702,6 @@ def register_callbacks(app: dash.Dash) -> None:
         iloop    = ILOOP_MAP.get(iloop, 0.7)
         if not n:
             raise PreventUpdate
-        if not compute_done:
-            return (no_update,
-                    "⚠  Complete Step 2 (Compute farm) first.",
-                    True, True, no_update)
 
         base_env  = app.server._base_env_grid
         if base_env is None:
@@ -697,12 +714,12 @@ def register_callbacks(app: dash.Dash) -> None:
         grid_scen = run_module1(base_env, delta_temp=dtemp, delta_sal=dsal,
                                 chla_mult=chla_mult, force_resample=False)
 
-        # Store full scenario grid for map display
+        # Always store full scenario grid — needed for env layer browsing
         app.server._scenario = grid_scen
 
-        # Run M2/M3/M4 on farm_cells for right panel summary
+        # Only run M2/M3/M4 on farm_cells if farm has been computed
         m12 = app.server._m12_result
-        if m12 is not None:
+        if compute_done and m12 is not None:
             farm_ids  = m12["farm_cells"]["cell_id"].values
             farm_scen = grid_scen[grid_scen["cell_id"].isin(farm_ids)].copy()
             if not farm_scen.empty:

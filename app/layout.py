@@ -13,8 +13,12 @@ from dash import dcc, html
 import dash_bootstrap_components as dbc
 from config import HARVEST_MONTHS, PRIMARY_HARVEST
 
-MONTH_LABELS  = {8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
-MONTH_OPTIONS = [{"label": MONTH_LABELS[m], "value": m} for m in HARVEST_MONTHS]
+MONTH_LABELS_ALL = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",
+                    7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
+ALL_MONTH_OPTIONS     = [{"label": MONTH_LABELS_ALL[m], "value": m}
+                          for m in range(1, 13)]
+HARVEST_MONTH_OPTIONS = [{"label": MONTH_LABELS_ALL[m], "value": m}
+                          for m in HARVEST_MONTHS]
 
 ENV_LAYER_OPTIONS = [
     {"label": "— No color —",               "value": "none"},
@@ -281,7 +285,10 @@ def build_layout():
                 _lbl("Colour layer"),
                 _dd("dd-env-layer", ENV_LAYER_OPTIONS, "none"),
                 _lbl("Month"),
-                _dd("dd-harvest-month", MONTH_OPTIONS, PRIMARY_HARVEST),
+                _dd("dd-env-month", ALL_MONTH_OPTIONS, 7),
+                _slider("slider-marker-size", "Marker size",
+                        2, 12, 1, 6,
+                        {2:"2", 4:"4", 6:"6", 8:"8", 10:"10", 12:"12"}),
 
                 # Step 2
                 _step(2, "Draw farm & compute"),
@@ -319,6 +326,9 @@ def build_layout():
                 _hr(),
                 _lbl("Result layer"),
                 _dd("dd-result-layer", RESULT_LAYER_OPTIONS, "N_red", disabled=True),
+                _lbl("Harvest month"),
+                _dd("dd-harvest-month", HARVEST_MONTH_OPTIONS, PRIMARY_HARVEST,
+                    disabled=True),
 
                 # Step 4
                 _step(4, "Export"),

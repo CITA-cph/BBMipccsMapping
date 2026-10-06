@@ -57,16 +57,17 @@ ENV_COLS_NO_MONTH = {"bathymetry_m", "conflict_score"}
 def _mapbox_layout(title: str = "",
                    center: dict = None,
                    zoom: float = None,
-                   preserve_viewport: bool = False) -> dict:
+                   preserve_viewport: bool = False,
+                   uirevision: str = "static") -> dict:
     """
     Shared map layout config.
 
     preserve_viewport=True: do not set center/zoom — Plotly keeps whatever
-    the user has panned/zoomed to. Use this for all re-renders after the
-    initial load so the map never jumps.
+    the user has panned/zoomed to.
 
-    uirevision="static" ensures Plotly never resets the viewport on any
-    figure update (layer change, result update, etc.).
+    uirevision: Plotly only redraws traces when this value changes.
+    Pass a string that encodes the data identity (layer + scenario + month)
+    so Plotly redraws when data changes but keeps viewport stable.
     """
     map_cfg = {"style": MAP_STYLE}
     if not preserve_viewport:
@@ -79,7 +80,7 @@ def _mapbox_layout(title: str = "",
         title=dict(text=title, x=0.5, font=dict(size=13)) if title else None,
         legend=dict(x=0.01, y=0.99, bgcolor="rgba(255,255,255,0.8)",
                     borderwidth=1, bordercolor="#ccc"),
-        uirevision="static",   # never reset viewport on figure update
+        uirevision=uirevision,
     )
 
 
@@ -91,6 +92,8 @@ def build_map(
     title: str = "",
     shapes: list | None = None,
     farm_gdf: gpd.GeoDataFrame | None = None,
+    marker_size: int = 6,
+    uirevision: str = "static",
 ) -> go.Figure:
     m   = f"{harvest_month:02d}"
     col = (f"{colour_col}_{m}"
@@ -124,7 +127,7 @@ def build_map(
         lon=gdf["lon"].values,
         mode="markers",
         marker=dict(
-            size=6, color=values, colorscale=cscale,
+            size=marker_size, color=values, colorscale=cscale,
             cmin=0, cmax=vmax, opacity=0.75,
             colorbar=dict(title=dict(text=col, side="right"),
                           thickness=10, len=0.55, x=1.0),
@@ -140,7 +143,7 @@ def build_map(
         if boundary is not None:
             fig.add_trace(boundary)
 
-    layout = _mapbox_layout(title, preserve_viewport=True)
+    layout = _mapbox_layout(title, preserve_viewport=True, uirevision=uirevision)
     if shapes:
         layout["shapes"] = shapes
     fig.update_layout(**layout)
@@ -150,6 +153,7 @@ def build_map(
 def build_exclusion_outline_map(
     gdf: gpd.GeoDataFrame,
     shapes: list | None = None,
+    marker_size: int = 6,
 ) -> go.Figure:
     """
     Startup map: plain basemap with exclusion zone outlines.
@@ -171,7 +175,7 @@ def build_exclusion_outline_map(
         fig.add_trace(go.Scattermap(
             lat=lats[avail_mask], lon=lons[avail_mask],
             mode="markers",
-            marker=dict(size=4, color="#2a3a4a", opacity=0.5),
+            marker=dict(size=max(2, marker_size - 2), color="#2a3a4a", opacity=0.5),
             hoverinfo="skip", name="Available",
             customdata=gdf["cell_id"].values[avail_mask],
         ))
@@ -181,7 +185,7 @@ def build_exclusion_outline_map(
         fig.add_trace(go.Scattermap(
             lat=lats[excl], lon=lons[excl],
             mode="markers",
-            marker=dict(size=5, color="#f06a6a", opacity=0.7),
+            marker=dict(size=marker_size, color="#f06a6a", opacity=0.7),
             text=[f"Cell {c} — EXCLUDED"
                   for c in gdf["cell_id"].values[excl]],
             hoverinfo="text", name="Excluded",
@@ -240,6 +244,8 @@ def build_env_map(
     harvest_month: int,
     title: str = "",
     shapes: list | None = None,
+    marker_size: int = 6,
+    uirevision: str = "static",
 ) -> go.Figure:
     """
     Step 1 map — shows a single env variable across the full grid.
@@ -274,7 +280,7 @@ def build_env_map(
         lon=gdf["lon"].values,
         mode="markers",
         marker=dict(
-            size=6, color=values, colorscale=cscale,
+            size=marker_size, color=values, colorscale=cscale,
             cmin=vmin, cmax=vmax, opacity=0.80,
             colorbar=dict(title=dict(text=col, side="right"),
                           thickness=10, len=0.55, x=1.0),
@@ -283,7 +289,8 @@ def build_env_map(
         customdata=gdf["cell_id"].values,
         name=col or env_col,
     ))
-    layout = _mapbox_layout(title or col or env_col, preserve_viewport=True)
+    layout = _mapbox_layout(title or col or env_col, preserve_viewport=True,
+                            uirevision=uirevision)
     if shapes:
         layout["shapes"] = shapes
     fig.update_layout(**layout)

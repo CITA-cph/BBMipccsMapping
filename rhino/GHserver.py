@@ -4,8 +4,14 @@ GHserver.py
 MYTIGATE Flask server for Rhino / Grasshopper integration.
 
 Replaces the Dash app entirely. Receives a farm polygon drawn in Rhino
-as WGS84 lon/lat coordinates (from Heron), runs the full pipeline on
-the complete grid, and returns results as numpy-reconstructable arrays.
+as WGS84 lon/lat coordinates (from Heron) and returns results as
+numpy-reconstructable arrays.
+
+Compute strategy (mirrors callbacks.py exactly):
+  - Spatial maps  : _baseline (full 61k-cell grid from baseline.gpkg),
+                    already has M2/M3/M4 from pipeline.py — returned as-is
+  - Farm summary  : M12 → M2 → M3 → M4 on farm_cells only (2-50 cells)
+  - Scenario      : same but on scenario env grid farm_cells
 
 Usage:
     python rhino/GHserver.py
@@ -120,12 +126,13 @@ def _build_result(
     """
     Build the result dict returned by /result.
 
-    grid            : full grid after M2/M3/M4 (baseline)
+    grid            : full baseline grid from baseline.gpkg (61k cells,
+                      M2/M3/M4 already computed by pipeline.py) — spatial maps
     m12             : dict from discretise_farm()
-    farm_cells      : subset of grid inside the drawn polygon (baseline)
+    farm_cells      : M2/M3/M4 computed on farm_cells only — farm summary
     scenario_label  : string label for active scenario
-    grid_scen       : full grid after M2/M3/M4 (scenario), or None
-    farm_cells_scen : farm_cells with scenario env, or None
+    grid_scen       : always None — full spatial always served from baseline
+    farm_cells_scen : scenario M2/M3/M4 on farm_cells — scenario farm summary
     """
 
     # ── Farm geometry scalars (from M12) ─────────────────────────────────────
@@ -333,43 +340,24 @@ def compute():
                            "Try a different location.",
             }), 400
 
-        # ── Propagate M12 geometry onto full baseline grid ────────────────────
-        # Farm cells get their per-cell rdep and lcol_m from M12.
-        # All other cells get rdep=0 → harvest=0 (not part of this farm).
-        # farm_area_m2 is set globally — M3 uses it for N_red_ha normalisation.
-        print("[Server] Propagating M12 geometry to full baseline grid...")
+        # ── Baseline: M2 → M3 → M4 on farm_cells only ────────────────────────
+        # Mirrors callbacks.py exactly:
+        #   - farm_cells runs M2/M3/M4 → used for farm summary (right panel)
+        #   - _baseline (full 61k-cell grid from baseline.gpkg) returned as-is
+        #     for the spatial maps — already has M2/M3/M4 from pipeline.py
+        print(f"[Server] Running M2/M3/M4 on farm_cells "
+              f"({len(m12['farm_cells'])} cells, {n_scenarios} scenarios)...")
 
-        baseline_full = _baseline.copy()
-        baseline_full["rdep"]         = 0.0
-        baseline_full["lcol_m"]       = 0.0
-        baseline_full["farm_area_m2"] = float(m12["farm_area_m2"])
-
-        fc_indexed = m12["farm_cells"].set_index("cell_id")
-        farm_mask  = baseline_full["cell_id"].isin(farm_cells_ids)
-
-        baseline_full.loc[farm_mask, "rdep"] = (
-            baseline_full.loc[farm_mask, "cell_id"].map(fc_indexed["rdep"]).values
-        )
-        baseline_full.loc[farm_mask, "lcol_m"] = (
-            baseline_full.loc[farm_mask, "cell_id"].map(fc_indexed["lcol_m"]).values
-        )
-
-        # ── Baseline: M2 → M3 → M4 on full grid ──────────────────────────────
-        print(f"[Server] Running M2/M3/M4 on full grid "
-              f"({len(baseline_full):,} cells, {n_scenarios} scenarios)...")
-
-        grid_baseline = run_module2(baseline_full, n_scenarios=n_scenarios,
-                                    n_workers=N_CPU)
-        grid_baseline = run_module3(grid_baseline)
-        grid_baseline = run_module4(
-            grid_baseline,
+        farm_cells_baseline = m12["farm_cells"].copy()
+        farm_cells_baseline = run_module2(farm_cells_baseline,
+                                          n_scenarios=n_scenarios,
+                                          n_workers=N_CPU)
+        farm_cells_baseline = run_module3(farm_cells_baseline)
+        farm_cells_baseline = run_module4(
+            farm_cells_baseline,
             D_short      = m12.get("D_short"),
             farm_area_m2 = m12.get("farm_area_m2"),
         )
-
-        farm_cells_baseline = grid_baseline[
-            grid_baseline["cell_id"].isin(farm_cells_ids)
-        ].copy()
 
         scenario_label  = "baseline"
         grid_scen       = None
@@ -397,42 +385,43 @@ def compute():
                                   f"ΔS={delta_sal:+.1f}psu "
                                   f"ChlA×{chla_mult:.2f}")
 
-            # Propagate same M12 geometry onto scenario env grid
-            scen_full = grid_env_scen.copy()
-            scen_full["rdep"]         = 0.0
-            scen_full["lcol_m"]       = 0.0
-            scen_full["farm_area_m2"] = float(m12["farm_area_m2"])
-
-            scen_mask = scen_full["cell_id"].isin(farm_cells_ids)
-            scen_full.loc[scen_mask, "rdep"] = (
-                scen_full.loc[scen_mask, "cell_id"].map(fc_indexed["rdep"]).values
-            )
-            scen_full.loc[scen_mask, "lcol_m"] = (
-                scen_full.loc[scen_mask, "cell_id"].map(fc_indexed["lcol_m"]).values
+            # M12 on scenario env grid to get scenario farm_cells
+            m12_scen = discretise_farm(
+                polygon_lonlat = polygon_lonlat,
+                grid           = grid_env_scen,
+                max_rdep       = max_rdep,
+                iloop          = iloop,
+                harvest_month  = harvest_month,
             )
 
-            print("[Server] Running M2/M3/M4 on full scenario grid...")
-            grid_scen = run_module2(scen_full, n_scenarios=n_scenarios,
-                                    n_workers=N_CPU)
-            grid_scen = run_module3(grid_scen)
-            grid_scen = run_module4(
-                grid_scen,
-                D_short      = m12.get("D_short"),
-                farm_area_m2 = m12.get("farm_area_m2"),
+            # M2 → M3 → M4 on scenario farm_cells only
+            print("[Server] Running M2/M3/M4 on scenario farm_cells...")
+            farm_cells_scen = m12_scen["farm_cells"].copy()
+            farm_cells_scen = run_module2(farm_cells_scen,
+                                          n_scenarios=n_scenarios,
+                                          n_workers=N_CPU)
+            farm_cells_scen = run_module3(farm_cells_scen)
+            farm_cells_scen = run_module4(
+                farm_cells_scen,
+                D_short      = m12_scen.get("D_short"),
+                farm_area_m2 = m12_scen.get("farm_area_m2"),
             )
 
-            farm_cells_scen = grid_scen[
-                grid_scen["cell_id"].isin(farm_cells_ids)
-            ].copy()
+            # Full scenario grid for spatial maps
+            grid_scen = grid_env_scen
 
         # ── Build and store result ────────────────────────────────────────────
+        # _baseline is the full 61k-cell grid from baseline.gpkg — spatial maps
+        # farm_cells_baseline is M2/M3/M4 on farm_cells only — farm summary
+        # grid_scen is None for spatial (no full scenario spatial grid computed)
+        # farm_cells_scen carries scenario farm summary if scenario was run
         print("[Server] Building result payload...")
         _latest_result = _build_result(
-            grid            = grid_baseline,
+            grid            = _baseline,
             m12             = m12,
             farm_cells      = farm_cells_baseline,
             scenario_label  = scenario_label,
-            grid_scen       = grid_scen,
+            grid_scen       = None,          # full spatial always from baseline
             farm_cells_scen = farm_cells_scen,
         )
 
@@ -452,7 +441,7 @@ def compute():
             "n_red_tN":      round(n_red, 3),
             "harvest_month": m_str,
             "scenario":      scenario_label,
-            "grid_cells":    len(grid_baseline),
+            "grid_cells":    len(_baseline),
         })
 
     except FileNotFoundError as e:
