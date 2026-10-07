@@ -3,10 +3,6 @@ GHserver.py
 -----------
 MYTIGATE Flask server for Rhino / Grasshopper integration.
 
-Replaces the Dash app entirely. Receives a farm polygon drawn in Rhino
-as WGS84 lon/lat coordinates (from Heron) and returns results as
-numpy-reconstructable arrays.
-
 Compute strategy (mirrors callbacks.py exactly):
   - Spatial maps  : _baseline (full 61k-cell grid from baseline.gpkg),
                     already has M2/M3/M4 from pipeline.py — returned as-is
@@ -18,7 +14,7 @@ Usage:
 
 Endpoints:
     GET  /status   — health check, confirms grids loaded
-    POST /compute  — run M12 → M2 → M3 → M4 on full grid
+    POST /compute  — run M12 → M2 → M3 → M4 on farm cells
     GET  /result   — retrieve computed arrays
 
 Coordinate convention:
@@ -38,7 +34,6 @@ import json
 import traceback
 from pathlib import Path
 
-# ── Make sure project root is on the path ────────────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -55,20 +50,18 @@ from model.growth import run_module2, run_module3, run_module4, N_CPU
 from utils.raster_sampler import run_module1
 from utils.climate_projections import load_scenario_env
 
-# ── Flask app ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
 
-# ── Server-side state (mirrors app.server._* in callbacks.py) ────────────────
-_baseline      = None   # full baseline GeoDataFrame (baseline.gpkg)
-_base_env_grid = None   # base grid with env columns (grid_base.gpkg)
-_latest_result = None   # most recent compute result, retrieved via /result
+_baseline      = None
+_base_env_grid = None
+_latest_result = None
 
 HARVEST_MONTHS_STR = [f"{h:02d}" for h in HARVEST_MONTHS]
 
 
-# ── Startup: load grids once ──────────────────────────────────────────────────
+# ── Startup ───────────────────────────────────────────────────────────────────
 
-def _load_grid(path: Path) -> gpd.GeoDataFrame | None:
+def _load_grid(path):
     if not path.exists():
         print(f"[Server] NOT FOUND: {path}")
         return None
@@ -80,7 +73,7 @@ def _load_grid(path: Path) -> gpd.GeoDataFrame | None:
     return gdf
 
 
-def load_all_grids() -> None:
+def load_all_grids():
     global _baseline, _base_env_grid
     print("[Server] Loading grids...")
     _baseline      = _load_grid(BASELINE_GPKG)
@@ -92,7 +85,7 @@ def load_all_grids() -> None:
     print("[Server] Startup complete")
 
 
-# ── JSON serialiser: numpy types are not JSON-serialisable by default ─────────
+# ── JSON serialiser ───────────────────────────────────────────────────────────
 
 class _NumpyEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -109,33 +102,81 @@ class _NumpyEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-def _jsonify_numpy(data: dict) -> str:
+def _jsonify_numpy(data):
     return json.dumps(data, cls=_NumpyEncoder)
+
+
+# ── Farm summary helper ───────────────────────────────────────────────────────
+
+def _farm_summary(fc):
+    """Aggregated totals per harvest month over farm_cells."""
+    summary = {}
+    for ms in HARVEST_MONTHS_STR:
+        row = {}
+        for prefix in ["N_red_", "N_red_p05_", "N_red_p95_",
+                        "P_red_", "harvest_WW_", "harvest_DW_", "shell_DW_"]:
+            col = f"{prefix}{ms}"
+            if col in fc.columns:
+                row[col] = float(fc[col].fillna(0).sum())
+        for prefix in ["mbio_p05_", "mbio_p50_", "mbio_p95_",
+                        "vh_ratio_", "food_limitation_"]:
+            col = f"{prefix}{ms}"
+            if col in fc.columns:
+                row[col] = float(fc[col].fillna(0).mean())
+        summary[ms] = row
+
+    return summary
+
+
+# ── Grid arrays helper ────────────────────────────────────────────────────────
+
+def _grid_arrays(g):
+    """All result columns across the full grid."""
+    out = {
+        "cell_id":        g["cell_id"].values,
+        "lat":            g["lat"].values,
+        "lon":            g["lon"].values,
+        "bathymetry_m":   g["bathymetry_m"].fillna(0).values
+                          if "bathymetry_m" in g.columns else np.zeros(len(g)),
+        "rdep":           g["rdep"].fillna(0).values
+                          if "rdep" in g.columns else np.zeros(len(g)),
+        "excluded":       g["excluded"].astype(bool).values
+                          if "excluded" in g.columns else np.zeros(len(g), dtype=bool),
+        "conflict_score": g["conflict_score"].fillna(0).values
+                          if "conflict_score" in g.columns else np.zeros(len(g)),
+    }
+    all_months_str = [f"{m:02d}" for m in range(1, 13)]
+    for ms in all_months_str:
+        for prefix in ["uo_", "vo_", "vh_",
+                       "temp_mean_", "temp_sd_",
+                       "sal_mean_",  "sal_sd_",
+                       "lnchla_mean_", "lnchla_sd_"]:
+            col = f"{prefix}{ms}"
+            if col in g.columns:
+                out[col] = g[col].fillna(0).values
+    for ms in HARVEST_MONTHS_STR:
+        for prefix in [
+            "mbio_p05_", "mbio_p50_", "mbio_p95_",
+            "harvest_DW_", "harvest_WW_", "shell_DW_",
+            "N_red_", "N_red_p05_", "N_red_p95_", "N_red_ha_",
+            "P_red_",
+            "vh_ratio_", "vh_crit_", "food_limitation_",
+        ]:
+            col = f"{prefix}{ms}"
+            if col in g.columns:
+                out[col] = g[col].fillna(0).values
+    if "food_limitation_severity" in g.columns:
+        out["food_limitation_severity"] = g["food_limitation_severity"].fillna(0).values
+    if "food_ok" in g.columns:
+        out["food_ok"] = g["food_ok"].astype(bool).values
+    return out
 
 
 # ── Result builder ────────────────────────────────────────────────────────────
 
-def _build_result(
-    grid: gpd.GeoDataFrame,
-    m12: dict,
-    farm_cells: gpd.GeoDataFrame,
-    scenario_label: str = "baseline",
-    grid_scen: gpd.GeoDataFrame | None = None,
-    farm_cells_scen: gpd.GeoDataFrame | None = None,
-) -> dict:
-    """
-    Build the result dict returned by /result.
+def _build_result(grid, m12, farm_cells, scenario_label="baseline",
+                  grid_scen=None, farm_cells_scen=None):
 
-    grid            : full baseline grid from baseline.gpkg (61k cells,
-                      M2/M3/M4 already computed by pipeline.py) — spatial maps
-    m12             : dict from discretise_farm()
-    farm_cells      : M2/M3/M4 computed on farm_cells only — farm summary
-    scenario_label  : string label for active scenario
-    grid_scen       : always None — full spatial always served from baseline
-    farm_cells_scen : scenario M2/M3/M4 on farm_cells — scenario farm summary
-    """
-
-    # ── Farm geometry scalars (from M12) ─────────────────────────────────────
     farm_geometry = {
         "farm_area_ha":          float(m12.get("farm_area_m2", 0) / 1e4),
         "n_sections":            int(m12.get("n_sections", 0)),
@@ -156,69 +197,6 @@ def _build_result(
         "total_cells":           int(len(farm_cells)),
     }
 
-    # ── Helper: build per-cell arrays for a grid ──────────────────────────────
-    def _grid_arrays(g: gpd.GeoDataFrame) -> dict:
-        """All result columns across the full grid — every cell."""
-        out = {
-            "cell_id":        g["cell_id"].values,
-            "lat":            g["lat"].values,
-            "lon":            g["lon"].values,
-            "bathymetry_m":   g["bathymetry_m"].fillna(0).values
-                              if "bathymetry_m" in g.columns else np.zeros(len(g)),
-            "rdep":           g["rdep"].fillna(0).values
-                              if "rdep" in g.columns else np.zeros(len(g)),
-            "excluded":       g["excluded"].astype(bool).values
-                              if "excluded" in g.columns else np.zeros(len(g), dtype=bool),
-            "conflict_score": g["conflict_score"].fillna(0).values
-                              if "conflict_score" in g.columns else np.zeros(len(g)),
-        }
-        # Env + flow columns — all 12 months (not just harvest months)
-        all_months_str = [f"{m:02d}" for m in range(1, 13)]
-        for m_str in all_months_str:
-            for prefix in ["uo_", "vo_", "vh_",
-                           "temp_mean_", "temp_sd_",
-                           "sal_mean_",  "sal_sd_",
-                           "lnchla_mean_", "lnchla_sd_"]:
-                col = f"{prefix}{m_str}"
-                if col in g.columns:
-                    out[col] = g[col].fillna(0).values
-
-        # All harvest month result columns
-        for m_str in HARVEST_MONTHS_STR:
-            for prefix in [
-                "mbio_p05_", "mbio_p50_", "mbio_p95_",
-                "harvest_DW_", "harvest_WW_", "shell_DW_",
-                "N_red_", "N_red_p05_", "N_red_p95_", "N_red_ha_",
-                "P_red_",
-                "vh_ratio_", "vh_crit_", "food_limitation_",
-            ]:
-                col = f"{prefix}{m_str}"
-                if col in g.columns:
-                    out[col] = g[col].fillna(0).values
-        if "food_limitation_severity" in g.columns:
-            out["food_limitation_severity"] = g["food_limitation_severity"].fillna(0).values
-        if "food_ok" in g.columns:
-            out["food_ok"] = g["food_ok"].astype(bool).values
-        return out
-
-    # ── Helper: aggregated totals per harvest month over farm_cells ───────────
-    def _farm_summary(fc: gpd.GeoDataFrame) -> dict:
-        summary = {}
-        for m_str in HARVEST_MONTHS_STR:
-            row = {}
-            for prefix in ["N_red_", "N_red_p05_", "N_red_p95_",
-                           "P_red_", "harvest_WW_", "harvest_DW_", "shell_DW_"]:
-                col = f"{prefix}{m_str}"
-                if col in fc.columns:
-                    row[col] = float(fc[col].fillna(0).sum())
-            for prefix in ["mbio_p05_", "mbio_p50_", "mbio_p95_",
-                           "vh_ratio_", "food_limitation_"]:
-                col = f"{prefix}{m_str}"
-                if col in fc.columns:
-                    row[col] = float(fc[col].fillna(0).mean())
-            summary[m_str] = row
-        return summary
-
     farm_cell_ids = farm_cells["cell_id"].tolist()
 
     result = {
@@ -232,6 +210,7 @@ def _build_result(
         },
     }
 
+    # ── Scenario block ────────────────────────────────────────────────────────
     if grid_scen is not None and farm_cells_scen is not None:
         result["scenario"] = {
             "grid":         _grid_arrays(grid_scen),
@@ -241,19 +220,18 @@ def _build_result(
     return result
 
 
-# ── / ─────────────────────────────────────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/", methods=["GET"])
 def home():
     b_cells = f"{len(_baseline):,} cells" if _baseline is not None else "NOT LOADED"
     e_cells = f"{len(_base_env_grid):,} cells" if _base_env_grid is not None else "NOT LOADED"
-    result_ready = _latest_result is not None
     return (
         f"<h2>MYTIGATE server is running</h2>"
         f"<pre>"
         f"baseline.gpkg  : {b_cells}\n"
         f"grid_base.gpkg : {e_cells}\n"
-        f"result ready   : {result_ready}\n"
+        f"result ready   : {_latest_result is not None}\n"
         f"</pre>"
         f"<p>Endpoints: "
         f"<code>GET /status</code> &nbsp;|&nbsp; "
@@ -261,8 +239,6 @@ def home():
         f"<code>GET /result</code></p>"
     )
 
-
-# ── /status ───────────────────────────────────────────────────────────────────
 
 @app.route("/status", methods=["GET"])
 def status():
@@ -275,8 +251,6 @@ def status():
     })
 
 
-# ── /compute ──────────────────────────────────────────────────────────────────
-
 @app.route("/compute", methods=["POST"])
 def compute():
     global _latest_result
@@ -285,15 +259,12 @@ def compute():
     if data is None:
         return jsonify({"status": "error", "message": "No JSON body"}), 400
 
-    # ── Validate grids loaded ─────────────────────────────────────────────────
     if _baseline is None or _base_env_grid is None:
         return jsonify({
             "status":  "error",
             "message": "Grids not loaded. Run pipeline.py first.",
         }), 500
 
-    # ── Parse inputs ──────────────────────────────────────────────────────────
-    # polygon_lonlat: [[lon, lat], ...] in WGS84 — directly from Heron
     polygon_lonlat = data.get("polygon_lonlat")
     max_rdep       = float(data.get("max_rdep",      2.0))
     iloop          = float(data.get("iloop",         0.7))
@@ -306,6 +277,8 @@ def compute():
     delta_sal      = float(data.get("delta_sal",     0.0))
     chla_mult      = float(data.get("chla_mult",     1.0))
 
+    print(f"\n[Server] scenario_mode received: {scenario_mode!r}")
+
     if not polygon_lonlat or len(polygon_lonlat) < 3:
         return jsonify({
             "status":  "error",
@@ -313,10 +286,8 @@ def compute():
         }), 400
 
     try:
-        # ── M12: Farm discretisation ──────────────────────────────────────────
-        # polygon_lonlat passed straight in — discretise_farm() calls
-        # lonlat_to_utm() internally, core untouched.
-        print(f"\n[Server] Running M12 — {len(polygon_lonlat)} vertices, "
+        # ── M12 baseline ──────────────────────────────────────────────────────
+        print(f"[Server] Running M12 — {len(polygon_lonlat)} vertices, "
               f"max_rdep={max_rdep}, iloop={iloop}, month={harvest_month:02d}")
         print(f"[Server] First vertex: lon={polygon_lonlat[0][0]:.4f}, "
               f"lat={polygon_lonlat[0][1]:.4f}")
@@ -329,25 +300,15 @@ def compute():
             harvest_month  = harvest_month,
         )
 
-        farm_cells_ids = m12["farm_cells"]["cell_id"].values \
-                         if not m12["farm_cells"].empty else np.array([])
-
         if m12["farm_cells"].empty:
             return jsonify({
                 "status":  "error",
-                "message": "No viable cells in polygon — all cells excluded "
-                           "(MPA, military, cables, shallow water, etc). "
-                           "Try a different location.",
+                "message": "No viable cells in polygon.",
             }), 400
 
-        # ── Baseline: M2 → M3 → M4 on farm_cells only ────────────────────────
-        # Mirrors callbacks.py exactly:
-        #   - farm_cells runs M2/M3/M4 → used for farm summary (right panel)
-        #   - _baseline (full 61k-cell grid from baseline.gpkg) returned as-is
-        #     for the spatial maps — already has M2/M3/M4 from pipeline.py
+        # ── M2/M3/M4 on baseline farm_cells ──────────────────────────────────
         print(f"[Server] Running M2/M3/M4 on farm_cells "
               f"({len(m12['farm_cells'])} cells, {n_scenarios} scenarios)...")
-
         farm_cells_baseline = m12["farm_cells"].copy()
         farm_cells_baseline = run_module2(farm_cells_baseline,
                                           n_scenarios=n_scenarios,
@@ -363,16 +324,16 @@ def compute():
         grid_scen       = None
         farm_cells_scen = None
 
-        # ── Scenario mode ─────────────────────────────────────────────────────
+        # ── Scenario ──────────────────────────────────────────────────────────
         if scenario_mode in ("cmip6", "delta"):
+            print(f"[Server] Scenario mode: {scenario_mode}")
 
             if scenario_mode == "cmip6":
                 print(f"[Server] Loading CMIP6 scenario: {ssp} / {period}")
                 grid_env_scen  = load_scenario_env(_base_env_grid, ssp=ssp, period=period)
                 scenario_label = f"{ssp} / {period}"
-
-            else:  # delta
-                print(f"[Server] Applying delta scenario: "
+            else:
+                print(f"[Server] Applying delta: "
                       f"ΔT={delta_temp:+.1f} ΔS={delta_sal:+.1f} ChlA×{chla_mult:.2f}")
                 grid_env_scen  = run_module1(
                     _base_env_grid,
@@ -385,7 +346,7 @@ def compute():
                                   f"ΔS={delta_sal:+.1f}psu "
                                   f"ChlA×{chla_mult:.2f}")
 
-            # M12 on scenario env grid to get scenario farm_cells
+            # M12 on scenario env grid — get farm geometry for this scenario
             m12_scen = discretise_farm(
                 polygon_lonlat = polygon_lonlat,
                 grid           = grid_env_scen,
@@ -394,46 +355,52 @@ def compute():
                 harvest_month  = harvest_month,
             )
 
-            # M2 → M3 → M4 on scenario farm_cells only
-            print("[Server] Running M2/M3/M4 on scenario farm_cells...")
-            farm_cells_scen = m12_scen["farm_cells"].copy()
-            farm_cells_scen = run_module2(farm_cells_scen,
-                                          n_scenarios=n_scenarios,
-                                          n_workers=N_CPU)
-            farm_cells_scen = run_module3(farm_cells_scen)
-            farm_cells_scen = run_module4(
-                farm_cells_scen,
+            # M2/M3/M4 on the FULL scenario grid (61k cells) — same as baseline
+            print(f"[Server] Running M2/M3/M4 on full scenario grid "
+                  f"({len(grid_env_scen):,} cells, {n_scenarios} scenarios)...")
+            grid_scen = grid_env_scen.copy()
+            grid_scen = run_module2(grid_scen,
+                                    n_scenarios=n_scenarios,
+                                    n_workers=N_CPU)
+            grid_scen = run_module3(grid_scen)
+            grid_scen = run_module4(
+                grid_scen,
                 D_short      = m12_scen.get("D_short"),
                 farm_area_m2 = m12_scen.get("farm_area_m2"),
             )
 
-            # Full scenario grid for spatial maps
-            grid_scen = grid_env_scen
+            # Farm cells from scenario full grid for farm summary
+            farm_cells_scen = grid_scen[
+                grid_scen["cell_id"].isin(m12_scen["farm_cells"]["cell_id"].values)
+            ].copy()
+            print(f"[Server] Scenario full grid done: {grid_scen.shape}, "
+                  f"farm cells: {len(farm_cells_scen)}")
+        else:
+            print(f"[Server] Baseline only — no scenario block will be written")
 
-        # ── Build and store result ────────────────────────────────────────────
-        # _baseline is the full 61k-cell grid from baseline.gpkg — spatial maps
-        # farm_cells_baseline is M2/M3/M4 on farm_cells only — farm summary
-        # grid_scen is None for spatial (no full scenario spatial grid computed)
-        # farm_cells_scen carries scenario farm summary if scenario was run
+        # ── Build result ──────────────────────────────────────────────────────
         print("[Server] Building result payload...")
         _latest_result = _build_result(
             grid            = _baseline,
             m12             = m12,
             farm_cells      = farm_cells_baseline,
             scenario_label  = scenario_label,
-            grid_scen       = None,          # full spatial always from baseline
+            grid_scen       = grid_scen if scenario_mode in ("cmip6", "delta") else None,
             farm_cells_scen = farm_cells_scen,
         )
 
+
+
+        m_str    = f"{harvest_month:02d}"
         n_viable = int(farm_cells_baseline["viable"].sum()) \
                    if "viable" in farm_cells_baseline.columns \
                    else len(farm_cells_baseline)
-        m_str = f"{harvest_month:02d}"
-        n_red = float(farm_cells_baseline[f"N_red_{m_str}"].sum()) \
-                if f"N_red_{m_str}" in farm_cells_baseline.columns else 0.0
+        n_red    = float(farm_cells_baseline[f"N_red_{m_str}"].sum()) \
+                   if f"N_red_{m_str}" in farm_cells_baseline.columns else 0.0
 
         print(f"[Server] Done — {n_viable} viable farm cells, "
-              f"N-red: {n_red:.1f} tN (month {m_str})")
+              f"N-red: {n_red:.1f} tN (month {m_str}), "
+              f"scenario: {scenario_label}")
 
         return jsonify({
             "status":        "ok",
@@ -455,8 +422,6 @@ def compute():
         return jsonify({"status": "error", "message": str(e), "traceback": tb}), 500
 
 
-# ── /result ───────────────────────────────────────────────────────────────────
-
 @app.route("/result", methods=["GET"])
 def result():
     if _latest_result is None:
@@ -465,14 +430,15 @@ def result():
             "message": "No result yet — POST to /compute first",
         }), 404
 
+    print(f"[Server] /result requested — "
+          f"{'with scenario' if 'scenario' in _latest_result else 'baseline only'}")
+
     response = app.response_class(
         response = _jsonify_numpy(_latest_result),
         mimetype = "application/json",
     )
     return response
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     load_all_grids()
