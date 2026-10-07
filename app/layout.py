@@ -1,13 +1,5 @@
 """
-app/layout.py — MYTIGATE Dash UI layout.
-
-4-step flow:
-  Step 1 — Explore environment (base map, env colour layers)
-  Step 2 — Draw farm & compute (newshape polygon → M12 → M2/M3/M4)
-  Step 3 — Visualise results (results colour layers, scenario toggle)
-  Step 4 — Export
-
-Single interactive Plotly Scattermap. Squarish map ratio via sidebar widths.
+app/layout.py — MYTIGATE_futures Dash UI layout.
 """
 from dash import dcc, html
 import dash_bootstrap_components as dbc
@@ -21,13 +13,13 @@ HARVEST_MONTH_OPTIONS = [{"label": MONTH_LABELS_ALL[m], "value": m}
                           for m in HARVEST_MONTHS]
 
 ENV_LAYER_OPTIONS = [
-    {"label": "— No color —",               "value": "none"},
-    {"label": "Exclusion zones",            "value": "exclusions"},
-    {"label": "Temperature  [°C]",          "value": "temp_mean"},
-    {"label": "Salinity  [psu]",            "value": "sal_mean"},
-    {"label": "Chlorophyll-a  [ln µg/L]",  "value": "lnchla_mean"},
-    {"label": "Flow speed  [m/s]",          "value": "vh"},
-    {"label": "Bathymetry  [m]",            "value": "bathymetry_m"},
+    {"label": "— No color —",              "value": "none"},
+    {"label": "Exclusion zones",           "value": "exclusions"},
+    {"label": "Temperature  [°C]",         "value": "temp_mean"},
+    {"label": "Salinity  [psu]",           "value": "sal_mean"},
+    {"label": "Chlorophyll-a  [ln µg/L]", "value": "lnchla_mean"},
+    {"label": "Flow speed  [m/s]",         "value": "vh"},
+    {"label": "Bathymetry  [m]",           "value": "bathymetry_m"},
 ]
 RESULT_LAYER_OPTIONS = [
     {"label": "N-reduction  [tN/farm]",    "value": "N_red"},
@@ -36,13 +28,6 @@ RESULT_LAYER_OPTIONS = [
     {"label": "Mussel biomass p50  [gDW]", "value": "mbio_p50"},
     {"label": "Food limitation ratio",     "value": "vh_ratio"},
     {"label": "Conflict score",            "value": "conflict_score"},
-]
-RDEP_OPTIONS  = [{"label": f"{v} m", "value": v} for v in [2,4,6,8]]
-ILOOP_OPTIONS = [
-    {"label": "0.7 m  (dense)",  "value": 0.7},
-    {"label": "1.0 m",           "value": 1.0},
-    {"label": "1.5 m",           "value": 1.5},
-    {"label": "2.0 m  (sparse)", "value": 2.0},
 ]
 SSP_OPTIONS = [
     {"label": "SSP1-2.6  (~+1.8 °C)", "value": "ssp1_2_6"},
@@ -61,7 +46,6 @@ body { margin:0; font-family:'Inter',system-ui,sans-serif;
        font-size:13px; background:#0f1117; color:#e0e0e0; }
 .app-shell { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
 
-/* Topbar */
 .topbar { display:flex; align-items:center; justify-content:space-between;
           padding:0 16px; height:46px; background:#141820;
           border-bottom:1px solid #2a2f3a; flex-shrink:0; }
@@ -72,16 +56,12 @@ body { margin:0; font-family:'Inter',system-ui,sans-serif;
 .topbar-status{ font-size:.72rem; color:#4caf79; }
 .topbar-right { display:flex; align-items:center; gap:12px; }
 
-/* Main */
 .main-row { display:flex; flex:1; overflow:hidden; }
-
-/* Sidebars — wide so map is squarish */
 .sidebar { width:340px; flex-shrink:0; overflow-y:auto; background:#141820;
            border-right:1px solid #2a2f3a; padding:10px 16px 32px; }
 .right-panel { width:320px; flex-shrink:0; overflow-y:auto; background:#141820;
                border-left:1px solid #2a2f3a; padding:10px 16px 32px; }
 
-/* Step headers */
 .step-header { display:flex; align-items:center; margin:16px 0 3px; }
 .step-num  { width:20px; height:20px; border-radius:50%; background:#1e2b3a;
              color:#7ec8e3; font-size:.68rem; font-weight:700;
@@ -95,20 +75,16 @@ body { margin:0; font-family:'Inter',system-ui,sans-serif;
 .sidebar-hint { font-size:.70rem; color:#566; margin:0 0 6px; line-height:1.4; }
 .ctrl-label { font-size:.72rem; color:#aab; display:block; margin:6px 0 2px; }
 
-/* Draw instruction */
 .draw-box { background:#1a2535; border:1px solid #2a3f55; border-radius:5px;
             padding:8px 10px; margin:6px 0 8px; }
 .draw-box p  { font-size:.72rem; color:#8ab; margin:0 0 3px; line-height:1.4; }
 .draw-steps  { font-size:.68rem; color:#677; margin:0; padding-left:14px;
                line-height:1.7; }
 
-/* Dropdowns */
-.dd { background:#1c2230 !important; color:#e0e0e0 !important;
-      font-size:.78rem !important; }
+.dd { background:#1c2230 !important; color:#e0e0e0 !important; font-size:.78rem !important; }
 .Select-control,.Select-menu-outer { background:#1c2230 !important; color:#e0e0e0 !important; }
 .Select-value-label { color:#e0e0e0 !important; }
 
-/* Sliders */
 .slider-wrap  { margin:6px 0 8px; }
 .slider-label { font-size:.70rem; color:#dde; display:block; margin-bottom:3px; }
 .rc-slider-rail        { background:#3a4a5a !important; height:4px !important; }
@@ -122,19 +98,17 @@ body { margin:0; font-family:'Inter',system-ui,sans-serif;
                             font-size:.68rem !important; border:1px solid #3a4a5a !important; }
 .dash-slider .rc-slider-rail  { background:#3a4a5a !important; }
 .dash-slider .rc-slider-track { background:#4caf79 !important; }
-/* Force track via the Dash-rendered class wrapper */
 .white-slider .rc-slider-track { background:#ffffff !important; height:4px !important; }
 .white-slider .rc-slider-rail  { background:#3a4a5a !important; height:4px !important; }
-.white-slider .rc-slider-handle { background:#ffffff !important;
-                                   border-color:#ffffff !important; }
+.white-slider .rc-slider-handle { background:#ffffff !important; border-color:#ffffff !important; }
 .white-slider .rc-slider-step   { background:transparent !important; }
 
-/* Status */
 .status-text { font-size:.70rem; color:#4caf79; margin-top:4px;
                min-height:14px; line-height:1.4; }
+.status-warn { color:#f0a040; }
 
-/* Map area */
 .map-area { flex:1; overflow:hidden; position:relative; background:#0a0d14; }
+/* Env browse toggle — top-centre of map */
 .map-toggle { position:absolute; top:10px; left:50%;
               transform:translateX(-50%); z-index:20;
               display:flex; border-radius:6px; overflow:hidden;
@@ -143,8 +117,11 @@ body { margin:0; font-family:'Inter',system-ui,sans-serif;
                   cursor:pointer; border:none; transition:background .15s; }
 .map-toggle-btn.active   { background:#2a4a3a; color:#7effc0; }
 .map-toggle-btn.inactive { background:#1c2230; color:#788; }
+/* Crop toggle — top-right of map */
+.crop-toggle { position:absolute; top:10px; right:10px; z-index:20;
+               display:flex; border-radius:6px; overflow:hidden;
+               border:1px solid #2a2f3a; }
 
-/* Right panel */
 .panel-title { font-size:.62rem; font-weight:600; color:#566;
                text-transform:uppercase; letter-spacing:.08em; margin:14px 0 4px; }
 .panel-hint  { font-size:.70rem; color:#455; line-height:1.4; }
@@ -163,17 +140,8 @@ body { margin:0; font-family:'Inter',system-ui,sans-serif;
 .cell-group-label { font-size:.60rem; color:#455; text-transform:uppercase;
                     letter-spacing:.06em; margin:6px 0 2px; }
 .badge-row { margin-bottom:5px; }
-.compare-table  { width:100%; }
-.compare-header { display:grid; grid-template-columns:1fr 46px 46px 38px;
-                  font-size:.60rem; color:#455; text-transform:uppercase; padding:2px 0; }
-.compare-row    { display:grid; grid-template-columns:1fr 46px 46px 38px;
-                  padding:2px 0; border-bottom:1px solid #1c2230; }
-.compare-col-label { font-size:.68rem; color:#788; }
-.compare-col-val   { font-size:.68rem; color:#d0d0d0; text-align:right; }
-.compare-col-delta { font-size:.68rem; font-weight:600; text-align:right; }
-.delta-pos { color:#4caf79; }
-.delta-neg { color:#f06a6a; }
 .export-btn { margin-bottom:5px !important; font-size:.73rem !important; }
+.grayed { opacity:0.35; pointer-events:none; }
 """
 
 
@@ -196,8 +164,7 @@ def _dd(sid, opts, val, **kw):
                         clearable=False, searchable=False,
                         className="dd", **kw)
 
-def _white_marks(marks: dict) -> dict:
-    """Force white text on slider marks — CSS class overrides don't reach rc-slider."""
+def _white_marks(marks):
     return {k: {"label": str(v),
                 "style": {"color": "#ffffff", "fontSize": "0.68rem"}}
             for k, v in marks.items()}
@@ -230,10 +197,10 @@ def build_layout():
 
         html.Div(className="main-row", children=[
 
-            # ── LEFT SIDEBAR ─────────────────────────────────────────────────
+            # ── LEFT SIDEBAR ──────────────────────────────────────────────────
             html.Div(className="sidebar", children=[
 
-                # Scenario mode — always at top
+                # ── Step 0: Scenario mode ──────────────────────────────────────
                 _step(0, "Scenario mode", "active"),
                 _hr(),
                 dcc.RadioItems(
@@ -277,11 +244,9 @@ def build_layout():
                     ),
                 ]),
 
-                # Step 1
+                # ── Step 1: Explore environment ────────────────────────────────
                 _step(1, "Explore environment"),
                 _hr(),
-                html.P("Select a layer to colour the map. No model results yet.",
-                       className="sidebar-hint"),
                 _lbl("Colour layer"),
                 _dd("dd-env-layer", ENV_LAYER_OPTIONS, "none"),
                 _lbl("Month"),
@@ -290,7 +255,7 @@ def build_layout():
                         2, 12, 1, 6,
                         {2:"2", 4:"4", 6:"6", 8:"8", 10:"10", 12:"12"}),
 
-                # Step 2
+                # ── Step 2: Draw farm & compute ────────────────────────────────
                 _step(2, "Draw farm & compute"),
                 _hr(),
                 html.Div(className="draw-box", children=[
@@ -306,13 +271,13 @@ def build_layout():
                              style={"marginTop": "6px", "fontSize": ".70rem",
                                     "fontWeight": "600"}),
                 ]),
+                html.Div(id="div-restriction-warning",
+                         style={"fontSize": ".70rem", "fontWeight": "600",
+                                "marginBottom": "6px", "minHeight": "14px"}),
                 _slider("slider-max-rdep", "Max collector depth [m]",
                         2, 8, None, 2, {2:"2m", 4:"4m", 6:"6m", 8:"8m"}),
                 _slider("slider-iloop", "Loop interval [m]",
                         0, 3, None, 0, {0:"0.7m", 1:"1.0m", 2:"1.5m", 3:"2.0m"}),
-                html.Div(id="div-restriction-warning",
-                         style={"fontSize": ".70rem", "fontWeight": "600",
-                                "marginBottom": "6px", "minHeight": "14px"}),
                 dbc.Button("⚙  Compute farm", id="btn-compute",
                            color="primary", className="w-100 mt-2",
                            style={"fontSize": ".80rem"}),
@@ -321,76 +286,72 @@ def build_layout():
                     type="dot", color="#4caf79",
                 ),
 
-                # Step 3
-                _step(3, "Visualise results"),
-                _hr(),
-                _lbl("Result layer"),
-                _dd("dd-result-layer", RESULT_LAYER_OPTIONS, "N_red", disabled=True),
-                _lbl("Harvest month"),
-                _dd("dd-harvest-month", HARVEST_MONTH_OPTIONS, PRIMARY_HARVEST,
-                    disabled=True),
-
-                # Step 4
-                _step(4, "Export"),
-                _hr(),
-                html.P(id="export-hint",
-                       children="Available after Step 2 completes.",
-                       className="sidebar-hint"),
-                dbc.Button("⬇  Env grid — baseline", id="btn-dl-env-baseline",
-                           color="secondary", outline=True, disabled=True,
-                           className="w-100 export-btn"),
-                dbc.Button("⬇  Results — baseline", id="btn-dl-results-baseline",
-                           color="secondary", outline=True, disabled=True,
-                           className="w-100 export-btn"),
-                html.Div(id="div-export-scenario", style={"display":"none"}, children=[
-                    dbc.Button("⬇  Env grid — scenario", id="btn-dl-env-scenario",
-                               color="success", outline=True, disabled=True,
-                               className="w-100 export-btn"),
-                    dbc.Button("⬇  Results — scenario", id="btn-dl-results-scenario",
-                               color="success", outline=True, disabled=True,
-                               className="w-100 export-btn"),
+                # ── Step 3: Visualise results ──────────────────────────────────
+                html.Div(id="div-step3", children=[
+                    _step(3, "Visualise results"),
+                    _hr(),
+                    _lbl("Result layer"),
+                    _dd("dd-result-layer", RESULT_LAYER_OPTIONS, "N_red", disabled=True),
+                    _lbl("Harvest month"),
+                    _dd("dd-harvest-month", HARVEST_MONTH_OPTIONS, PRIMARY_HARVEST,
+                        disabled=True),
                 ]),
-                dbc.Button("⬇  Farm summary (CSV)", id="btn-dl-farm-summary",
-                           color="secondary", outline=True, disabled=True,
-                           className="w-100 export-btn"),
-                dbc.Button("⬇  Farm cell summary (CSV)", id="btn-dl-cell-summary",
-                           color="secondary", outline=True, disabled=True,
-                           className="w-100 export-btn"),
-                dcc.Download(id="dl-env-baseline"),
-                dcc.Download(id="dl-results-baseline"),
-                dcc.Download(id="dl-env-scenario"),
-                dcc.Download(id="dl-results-scenario"),
-                dcc.Download(id="dl-farm-summary"),
-                dcc.Download(id="dl-cell-summary"),
+
+                # ── Step 4: Export ─────────────────────────────────────────────
+                html.Div(id="div-step4", children=[
+                    _step(4, "Export"),
+                    _hr(),
+                    html.P(id="export-hint",
+                           children="Available after Step 2 completes.",
+                           className="sidebar-hint"),
+                    dbc.Button("⬇  Farm summary", id="btn-dl-farm-summary",
+                               color="secondary", outline=True, disabled=True,
+                               className="w-100 export-btn"),
+                    dbc.Button("⬇  Farm cell summary", id="btn-dl-cell-summary",
+                               color="secondary", outline=True, disabled=True,
+                               className="w-100 export-btn"),
+                    dbc.Button("⬇  Env grid", id="btn-dl-env-baseline",
+                               color="secondary", outline=True, disabled=True,
+                               className="w-100 export-btn"),
+                    dbc.Button("⬇  Results grid", id="btn-dl-results-baseline",
+                               color="secondary", outline=True, disabled=True,
+                               className="w-100 export-btn"),
+                    dcc.Download(id="dl-farm-summary"),
+                    dcc.Download(id="dl-cell-summary"),
+                    dcc.Download(id="dl-env-baseline"),
+                    dcc.Download(id="dl-results-baseline"),
+                ]),
             ]),
 
-            # ── MAP ───────────────────────────────────────────────────────────
+            # ── MAP ────────────────────────────────────────────────────────────
             html.Div(className="map-area", children=[
-                # Baseline / Scenario toggle
+
+                # Env browse toggle — visible in Step 1, hidden after compute
+                # Greyed out if no scenario loaded (baseline only)
                 html.Div(id="div-map-toggle", className="map-toggle",
-                         style={"display":"none"}, children=[
+                         style={"display": "none"}, children=[
                     html.Button("Baseline", id="btn-view-baseline",
                                 className="map-toggle-btn active", n_clicks=0),
                     html.Button("Scenario", id="btn-view-scenario",
                                 className="map-toggle-btn inactive", n_clicks=0),
                 ]),
-                # Crop toggle — shown after compute
-                html.Div(id="div-crop-toggle", className="map-toggle",
-                         style={"display":"none",
-                                "top":"10px", "left":"calc(50% + 160px)",
-                                "transform":"none"}, children=[
+
+                # Crop toggle — visible after compute
+                html.Div(id="div-crop-toggle", className="crop-toggle",
+                         style={"display": "none"}, children=[
                     html.Button("Farm only", id="btn-crop-farm",
                                 className="map-toggle-btn active", n_clicks=0),
                     html.Button("Full grid", id="btn-crop-full",
                                 className="map-toggle-btn inactive", n_clicks=0),
                 ]),
+
                 dcc.Graph(
                     id="map-graph",
-                    style={"height":"100%","width":"100%"},
+                    style={"height": "100%", "width": "100%"},
                     config={
                         "scrollZoom": True,
-                        "modeBarButtonsToRemove": ["lasso2d","select2d"],
-                        "modeBarButtonsToAdd":    ["drawclosedpath","eraseshape"],
+                        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+                        "modeBarButtonsToAdd":    ["drawclosedpath", "eraseshape"],
                         "displaylogo": False,
                         "editable": True,
                         "edits": {"shapePosition": False},
@@ -398,7 +359,7 @@ def build_layout():
                 ),
             ]),
 
-            # ── RIGHT PANEL ───────────────────────────────────────────────────
+            # ── RIGHT PANEL ────────────────────────────────────────────────────
             html.Div(className="right-panel", children=[
                 html.Div(className="panel-section", children=[
                     html.P("Farm summary", className="panel-title"),
@@ -413,34 +374,33 @@ def build_layout():
                              children=html.Span("Click any cell on the map.",
                                                 className="panel-hint")),
                 ]),
-                html.Div(id="div-compare-panel", className="panel-section",
-                         style={"display":"none"}, children=[
-                    html.P("Baseline vs scenario", className="panel-title"),
-                    html.Div(id="div-compare-table"),
-                ]),
             ]),
         ]),
 
         # Hidden stores
         dcc.Store(id="store-compute-done",   data=False),
-        dcc.Store(id="store-crop-mode",      data="farm"),  # "farm" | "full"
+        dcc.Store(id="store-crop-mode",      data="farm"),
         dcc.Store(id="store-scenario-ready", data=False),
         dcc.Store(id="store-active-view",    data="baseline"),
         dcc.Store(id="store-scenario-label", data=""),
         dcc.Store(id="store-farm-cells-ids"),
-        dcc.Store(id="store-drawn-shape"),   # holds {"shape_path": "..."}
+        dcc.Store(id="store-drawn-shape"),
         dcc.Store(id="store-map-viewport",
                   data={"center": {"lon": 11.5, "lat": 56.3}, "zoom": 7.0}),
+        dcc.Store(id="store-computed-label", data="baseline"),
+        dcc.Store(id="store-farm-lonlat"),      # lon/lat coords of last computed polygon
+        dcc.Store(id="store-new-polygon-drawn", data=False),  # True only after user draws
     ])
 
 
-# ── Render helpers ─────────────────────────────────────────────────────────────
+# ── Render helpers ──────────────────────────────────────────────────────────────
 
-def render_farm_summary(m12: dict, m_str: str) -> html.Div:
-    farm_cells = m12.get("farm_cells")
+def render_farm_summary(m12: dict, farm_cells, harvest_month: int) -> html.Div:
+    """Render farm geometry + results for given harvest month."""
     if farm_cells is None or farm_cells.empty:
         return html.Span("No viable cells in polygon.", className="panel-hint")
 
+    m_str    = f"{harvest_month:02d}"
     n_cells  = len(farm_cells)
     n_viable = int(farm_cells["viable"].sum()) \
                if "viable" in farm_cells.columns else n_cells
@@ -466,22 +426,26 @@ def render_farm_summary(m12: dict, m_str: str) -> html.Div:
         ])
 
     geom = [
-        row("Farm area",   m12.get("farm_area_m2", 0)/1e4, "ha",  ".1f"),
-        row("Sections",    m12.get("n_sections"),           "",    "d"),
-        row("D_short",     m12.get("D_short"),              "m",   ".0f"),
-        row("D_long",      m12.get("D_long"),               "m",   ".0f"),
-        row("l_col mean",  m12.get("l_col"),                "m",   ".0f"),
-        row("Orientation", m12.get("orientation_deg"),      "°",   ".1f"),
-        row("Flow mean",   m12.get("vh_mean"),              "m/s", ".3f"),
-        row("Viable cells",n_viable, f"/ {n_cells}",              "d"),
+        row("Farm area",    m12.get("farm_area_m2", 0)/1e4, "ha",  ".1f"),
+        row("Sections",     m12.get("n_sections"),           "",    "d"),
+        row("D_short",      m12.get("D_short"),              "m",   ".0f"),
+        row("D_long",       m12.get("D_long"),               "m",   ".0f"),
+        row("l_col mean",   m12.get("l_col"),                "m",   ".0f"),
+        row("Orientation",  m12.get("orientation_deg"),      "°",   ".1f"),
+        row("Flow mean",    m12.get("vh_mean"),              "m/s", ".3f"),
+        row("Viable cells", n_viable, f"/ {n_cells}",              "d"),
     ]
     results = [
-        row("N-reduction", _sum(f"N_red_{m_str}"),       "tN"),
-        row("P-reduction", _sum(f"P_red_{m_str}"),       "tP",  ".3f"),
-        row("Harvest WW",  _sum(f"harvest_WW_{m_str}"),  "t"),
-        row("Shell DW",    _sum(f"shell_DW_{m_str}"),    "t"),
-        row("mbio p50",    _mean_pos(f"mbio_p50_{m_str}"), "gDW", ".4f"),
-        row("vh_ratio",    _mean_pos(f"vh_ratio_{m_str}"), "",   ".3f"),
+        row("N-reduction",  _sum(f"N_red_{m_str}"),          "tN"),
+        row("P-reduction",  _sum(f"P_red_{m_str}"),          "tP",  ".3f"),
+        row("Harvest WW",   _sum(f"harvest_WW_{m_str}"),     "t"),
+        row("Shell DW",     _sum(f"shell_DW_{m_str}"),       "t"),
+        row("mbio p05",     _mean_pos(f"mbio_p05_{m_str}"),  "gDW", ".4f"),
+        row("mbio p50",     _mean_pos(f"mbio_p50_{m_str}"),  "gDW", ".4f"),
+        row("mbio p95",     _mean_pos(f"mbio_p95_{m_str}"),  "gDW", ".4f"),
+        row("vh_ratio",     _mean_pos(f"vh_ratio_{m_str}"),  "",    ".3f"),
+        row("N_red p05",    _sum(f"N_red_p05_{m_str}"),      "tN"),
+        row("N_red p95",    _sum(f"N_red_p95_{m_str}"),      "tN"),
     ]
     return html.Div([
         html.Div(className="summary-card", children=[
@@ -519,55 +483,21 @@ def render_cell_report(report: dict) -> html.Div:
                       color="success" if food_ok else "warning", className="ms-1"),
         ]),
         html.Div(className="cell-group-label", children="Location"),
-        row("Depth",   report.get("bathymetry_m"), "m"),
-        row("rdep",    report.get("rdep_m"),        "m"),
-        row("Conflict",report.get("conflict_score")),
-        row("vh_ratio",report.get("vh_ratio")),
+        row("Depth",    report.get("bathymetry_m"), "m"),
+        row("rdep",     report.get("rdep_m"),        "m"),
+        row("Conflict", report.get("conflict_score")),
+        row("vh_ratio", report.get("vh_ratio")),
         html.Div(className="cell-group-label", children="Mussel"),
         row("mbio p05", report.get("mbio_p05_gDW"), "gDW"),
         row("mbio p50", report.get("mbio_p50_gDW"), "gDW"),
         row("mbio p95", report.get("mbio_p95_gDW"), "gDW"),
         html.Div(className="cell-group-label", children="Farm"),
-        row("N-red",   report.get("N_red_tN"),     "tN"),
-        row("P-red",   report.get("P_red_tP"),     "tP"),
-        row("Harvest", report.get("harvest_WW_t"), "t"),
-        row("N/ha",    report.get("N_red_ha"),     "tN/ha"),
+        row("N-red",    report.get("N_red_tN"),     "tN"),
+        row("P-red",    report.get("P_red_tP"),     "tP"),
+        row("Harvest",  report.get("harvest_WW_t"), "t"),
+        row("N/ha",     report.get("N_red_ha"),     "tN/ha"),
         html.Div(className="cell-group-label", children="Environment"),
-        row("Temp",    report.get("temp_mean_C"),  "°C"),
-        row("Sal",     report.get("sal_mean_psu"), "psu"),
-        row("ChlA",    report.get("chla_ugL"),     "µg/L"),
+        row("Temp",     report.get("temp_mean_C"),  "°C"),
+        row("Sal",      report.get("sal_mean_psu"), "psu"),
+        row("ChlA",     report.get("chla_ugL"),     "µg/L"),
     ] if s is not None])
-
-
-def render_compare_table(rep_base: dict, rep_scen: dict, label: str) -> html.Div:
-    if not rep_base or not rep_scen:
-        return html.Span("Click a cell.", className="panel-hint")
-    keys = [
-        ("N-red tN",  "N_red_tN"),
-        ("P-red tP",  "P_red_tP"),
-        ("Harvest t", "harvest_WW_t"),
-        ("mbio p50",  "mbio_p50_gDW"),
-        ("Temp °C",   "temp_mean_C"),
-        ("Sal psu",   "sal_mean_psu"),
-        ("ChlA",      "chla_ugL"),
-        ("vh_ratio",  "vh_ratio"),
-    ]
-    short = label[:10]
-    rows = [html.Div(className="compare-header", children=[
-        html.Span("",     className="compare-col-label"),
-        html.Span("Base", className="compare-col-val"),
-        html.Span(short,  className="compare-col-val"),
-        html.Span("Δ",    className="compare-col-delta"),
-    ])]
-    for lbl, key in keys:
-        bv = rep_base.get(key) or 0.0
-        sv = rep_scen.get(key) or 0.0
-        d  = sv - bv
-        rows.append(html.Div(className="compare-row", children=[
-            html.Span(lbl,          className="compare-col-label"),
-            html.Span(f"{bv:.2f}", className="compare-col-val"),
-            html.Span(f"{sv:.2f}", className="compare-col-val"),
-            html.Span(f"{d:+.2f}",
-                      className=f"compare-col-delta {'delta-pos' if d>=0 else 'delta-neg'}"),
-        ]))
-    return html.Div(rows, className="compare-table")
