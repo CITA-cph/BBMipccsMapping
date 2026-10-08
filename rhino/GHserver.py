@@ -363,11 +363,7 @@ def compute():
                                     n_scenarios=n_scenarios,
                                     n_workers=N_CPU)
             grid_scen = run_module3(grid_scen)
-            grid_scen = run_module4(
-                grid_scen,
-                D_short      = m12_scen.get("D_short"),
-                farm_area_m2 = m12_scen.get("farm_area_m2"),
-            )
+            grid_scen = run_module4(grid_scen)
 
             # Farm cells from scenario full grid for farm summary
             farm_cells_scen = grid_scen[
